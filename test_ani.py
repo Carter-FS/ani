@@ -28,4 +28,24 @@ assert lines[1][1] == 60000
 # card sentence matching ignores punctuation and whitespace
 assert s.normalize_str("こら…　<b>元気</b>すぎるぞ…") == s.normalize_str("こら… 元気すぎるぞ")
 
+# dropped files are found by name + size and moved into the series
+from pathlib import Path  # noqa: E402
+tmp = Path(tempfile.mkdtemp())
+(tmp / "dl" / "nested").mkdir(parents=True)
+(tmp / "show").mkdir()
+(tmp / "dl" / "nested" / "Show - 02.mp4").write_bytes(b"x" * 10)
+(tmp / "dl" / "Show - 02.mp4").write_bytes(b"x" * 5)  # same name, different size
+s.SEARCH_ROOTS = [tmp / "dl"]
+s.STATE["series"][str(tmp / "show")] = {"subs": None}
+assert s.find_original("Show - 02.mp4", 10) == [tmp / "dl" / "nested" / "Show - 02.mp4"]
+assert s.adopt(str(tmp / "show"), "Show - 02.mp4", 10) == tmp / "show" / "Show - 02.mp4"
+assert not (tmp / "dl" / "nested" / "Show - 02.mp4").exists()
+assert s.adopt(str(tmp / "show"), "Show - 02.mp4", 10) == tmp / "show" / "Show - 02.mp4"  # idempotent
+for bad in [("/nope", "a.mp4", 1), (str(tmp / "show"), "a.exe", 1), (str(tmp / "show"), "missing.mp4", 1)]:
+    try:
+        s.adopt(*bad)
+        raise AssertionError(bad)
+    except (ValueError, LookupError):
+        pass
+
 print("ok")

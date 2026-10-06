@@ -181,36 +181,100 @@ def allowed(path):
     return None
 
 
+FAILED = {}  # video path -> (size, mtime) when its sync last failed
+
+
+def signature(video):
+    st = video.stat()
+    return st.st_size, st.st_mtime
+
+
+def needs_sync(video):
+    """Unsynced and not already failed in its current state (a finished download retries)."""
+    return not synced_path(video).exists() and FAILED.get(video) != signature(video)
+
+
 def ensure_synced(video):
     """Synced subtitle path, or the unsynced source if alass failed."""
     out = synced_path(video)
     if out.exists():
         return out
-    src = STATE["overrides"].get(str(video)) or STATE["series"].get(str(video.parent), {}).get("subs")
-    sub = find_sub(video, Path(src) if src else video.parent)
+    try:
+        src = STATE["overrides"].get(str(video)) or STATE["series"].get(str(video.parent), {}).get("subs")
+        sub = find_sub(video, Path(src) if src else video.parent)
+    except (LookupError, OSError):
+        FAILED[video] = signature(video)
+        raise
     with SYNC_LOCK:
         if out.exists() or sync(video, sub, out):
             return out
+    FAILED[video] = signature(video)
     return sub
 
 
 def sync_season(folder):
     """Sync every episode in the background so autoplaying the next one is instant."""
-    if folder in BG_DIRS:
+    if folder in BG_DIRS or not any(needs_sync(v) for v in episodes(folder)):
         return
     BG_DIRS.add(folder)
 
     def run():
+        # rescan after each pass so files added mid-run (e.g. dropped in the UI) are picked up
         try:
-            for v in episodes(folder):
-                try:
-                    ensure_synced(v)
-                except LookupError:
-                    pass
+            while todo := [v for v in episodes(folder) if needs_sync(v)]:
+                for v in todo:
+                    try:
+                        ensure_synced(v)
+                    except (LookupError, OSError):
+                        pass
         finally:
             BG_DIRS.discard(folder)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+SEARCH_ROOTS = [Path(p).expanduser() for p in os.environ.get(
+    "ANI_SEARCH", "~/Downloads:~/Desktop:~/Movies:~/Videos").split(os.pathsep)]
+
+
+def find_original(name, size, mtime_ms=None, roots=None, depth=4):
+    """Locate a dropped file on disk by name and size (the browser never sees its path)."""
+    hits = []
+    for root in roots or SEARCH_ROOTS:
+        if not root.is_dir():
+            continue
+        base = len(root.parts)
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if not x.startswith(".")] if len(Path(d).parts) - base < depth else []
+            if name in files:
+                p = Path(d, name)
+                if p.stat().st_size == size:
+                    hits.append(p)
+    if len(hits) > 1 and mtime_ms:
+        hits = [p for p in hits if abs(p.stat().st_mtime * 1000 - mtime_ms) < 2000] or hits
+    return hits
+
+
+def adopt(folder, name, size, mtime_ms=None):
+    """Move a dropped episode or subtitle into a series. Returns the new path."""
+    name = Path(name).name
+    ext = Path(name).suffix.lower()
+    if folder not in STATE["series"] or not name or ext not in VIDEO_EXTS | SUB_EXTS:
+        raise ValueError("unsupported file or unknown series")
+    subs = STATE["series"][folder].get("subs")
+    dest = Path(subs if ext in SUB_EXTS and subs and Path(subs).is_dir() else folder) / name
+    if dest.exists():
+        if dest.stat().st_size == size:
+            return dest  # already in place
+        raise FileExistsError(f"a different {name} is already in the series")
+    hits = find_original(name, size, mtime_ms)
+    if not hits:
+        raise LookupError(f"couldn't find {name} in {', '.join(map(str, SEARCH_ROOTS))}")
+    if len(hits) > 1:
+        raise LookupError(f"{len(hits)} files named {name}; move it with the CLI instead")
+    shutil.move(hits[0], dest)
+    print(f"moved {hits[0]} -> {dest}", flush=True)
+    return dest
 
 
 def progress(video):
@@ -446,7 +510,7 @@ class Server(BaseHTTPRequestHandler):
                             "synced": synced_path(v).exists(), "pos": pos, "dur": dur,
                             "watched": is_watched(v)})
             self.send(body={"dir": folder, "name": Path(folder).name, "episodes": eps,
-                            "series": list(STATE["series"]),
+                            "series": list(STATE["series"]), "syncing": folder in BG_DIRS,
                             "continue": str(target) if target and str(target.parent) == folder else None})
         elif url.path == "/api/continue":
             target = continue_target()
@@ -481,7 +545,16 @@ class Server(BaseHTTPRequestHandler):
             return self.send(400)
         path = urlparse(self.path).path
 
-        if path == "/register":
+        if path == "/adopt":
+            try:
+                dest = adopt(body.get("dir", ""), body.get("name", ""), int(body.get("size", -1)), body.get("mtime"))
+            except FileExistsError as e:
+                return self.send(409, {"error": str(e)})
+            except (ValueError, LookupError, OSError) as e:
+                return self.send(400, {"error": str(e)})
+            sync_season(body["dir"])
+            self.send(body={"path": str(dest)})
+        elif path == "/register":
             folder = str(Path(body["dir"]).resolve())
             entry = STATE["series"].setdefault(folder, {"subs": None})
             if body.get("subs"):

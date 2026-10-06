@@ -10,6 +10,7 @@ Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, r
 - Card fields filled through AnkiConnect: sentence, screenshot (JPEG) and sentence audio (MP3)
 - Subtitles synced to the video's audio with [alass](https://github.com/kaegi/alass) on first play; the rest of the season syncs in the background
 - Library with thumbnails and watch progress; resumes where you left off
+- Drag and drop episodes or subtitles onto a series to move them in and sync them
 - Spoiler-free transcript, pause on hovering the subtitle, line-by-line navigation
 
 ## Requirements
@@ -56,6 +57,8 @@ ani --stop                 # stop the background server
 
 With a subtitle folder, each video is matched to a subtitle by episode number (`S01E03`, `- 03`, `第3話`). Synced subtitles are saved next to each video as `<video>.ja.srt`.
 
+To add episodes from the browser, drop files onto a series page or use **Add episodes**. Browsers do not expose file paths, so the server finds each file by name and size in the `ANI_SEARCH` folders and moves it into the series. Subtitles go to the series' subtitle folder.
+
 ## Keys
 
 | Key | Action |
@@ -75,6 +78,7 @@ With a subtitle folder, each video is matched to a subtitle by episode number (`
 | --- | --- | --- |
 | `ANI_BROWSER` | system default | Browser to open; macOS app name or Linux command name |
 | `ANI_PORT` | `6969` | Server port |
+| `ANI_SEARCH` | `~/Downloads:~/Desktop:~/Movies:~/Videos` | Folders searched for dropped files |
 | `ANI_STATE` | `$XDG_STATE_HOME/ani` | State, settings, thumbnails and the server log |
 | `ANKICONNECT` | `http://127.0.0.1:8765` | AnkiConnect URL |
 

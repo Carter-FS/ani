@@ -45,7 +45,17 @@
     #library h1 { margin: 0 0 0.25rem; font-size: 1.6rem; letter-spacing: -0.02em; }
     #library .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.9rem; }
     #library select { font: inherit; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.3rem 0.5rem; }
-    .continue { display: inline-flex; align-items: center; gap: 0.6rem; border: 0; border-radius: 999px; background: var(--accent); color: white; padding: 0.6rem 1.1rem; font-weight: 600; margin-bottom: 1.75rem; }
+    .continue { display: inline-flex; align-items: center; gap: 0.6rem; border: 0; border-radius: 999px; background: var(--accent); color: white; padding: 0.6rem 1.1rem; font-weight: 600; }
+    .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 1.75rem; }
+    .ghost { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); padding: 0.55rem 1rem; font-weight: 500; }
+    .ghost:hover { border-color: var(--muted); }
+    .syncing { color: var(--muted); font-size: 0.85rem; }
+    #drop { position: fixed; inset: 0.75rem; z-index: 20; border: 2px dashed var(--accent); border-radius: 18px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+      display: grid; place-items: center; font-size: 1.3rem; font-weight: 600; pointer-events: none; }
+    #adds { position: fixed; right: 1rem; bottom: 1rem; z-index: 21; display: flex; flex-direction: column; gap: 0.5rem; max-width: min(28rem, calc(100vw - 2rem)); }
+    #adds div { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 10px; padding: 0.55rem 0.8rem; font-size: 0.85rem; cursor: pointer; overflow-wrap: anywhere; }
+    #adds .ok { border-left-color: var(--ok); }
+    #adds .err { border-left-color: var(--bad); }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.1rem; }
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: transform 120ms, border-color 120ms; }
     .card:hover { transform: translateY(-2px); border-color: var(--muted); }
@@ -126,6 +136,9 @@
 
   <main>
     <section id="library" hidden></section>
+    <div id="drop" hidden></div>
+    <div id="adds" aria-live="polite"></div>
+    <input type="file" id="add-input" multiple accept="video/*,.mkv,.srt,.ass" hidden>
 
     <section id="player" hidden>
       <div class="left">
@@ -211,13 +224,17 @@ form.onsubmit = () => {
 };
 
 /* library */
+let LIB = null;
+let libTimer;
 async function showLibrary(dir) {
+  clearTimeout(libTimer);
   $('#player').hidden = true;
   const lib = $('#library');
   lib.hidden = false;
   const data = await api('/api/library' + (dir ? '?dir=' + encodeURIComponent(dir) : ''));
   document.title = data.name ? `${data.name} - ani` : 'ani';
   $('#crumb').textContent = data.name || '';
+  LIB = data.dir || null;
   if (!data.dir) {
     lib.innerHTML = `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>`;
     return;
@@ -228,7 +245,11 @@ async function showLibrary(dir) {
     <h1>${esc(data.name)}</h1>
     <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
       ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${esc(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
-    ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
+    <div class="actions">
+      ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
+      <button class="ghost" id="add" title="Or drop files anywhere on this page">+ Add episodes</button>
+      ${data.syncing ? '<span class="syncing">Syncing subtitles&hellip;</span>' : ''}
+    </div>
     <div class="grid">${data.episodes.map((e) => `
       <a class="card" href="/?v=${encodeURIComponent(e.path)}">
         <div class="thumb">
@@ -243,7 +264,63 @@ async function showLibrary(dir) {
       </a>`).join('')}</div>`;
   $('#continue')?.addEventListener('click', () => location.href = '/?v=' + encodeURIComponent(data.continue));
   $('#series')?.addEventListener('change', (ev) => location.href = '/?dir=' + encodeURIComponent(ev.target.value));
+  $('#add').onclick = () => $('#add-input').click();
+  if (data.syncing) libTimer = setTimeout(() => { if (!$('#library').hidden) showLibrary(data.dir); }, 3000);
 }
+
+/* adding episodes: the browser only sees name/size, so the server finds the file and moves it */
+function note(text, cls = '') {
+  const el = document.createElement('div');
+  el.textContent = text;
+  el.className = cls;
+  el.title = 'Dismiss';
+  el.onclick = () => el.remove();
+  $('#adds').appendChild(el);
+  return el;
+}
+
+async function addFiles(files) {
+  if (!LIB || !files.length) return;
+  for (const f of files) {
+    const row = note(`Moving ${f.name}…`);
+    try {
+      const r = await fetch('/adopt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: LIB, name: f.name, size: f.size, mtime: f.lastModified }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      row.textContent = `Added ${f.name}`;
+      row.className = 'ok';
+      setTimeout(() => row.remove(), 5000);
+    } catch (e) {
+      row.textContent = `${f.name}: ${e.message}`;
+      row.className = 'err';
+    }
+  }
+  showLibrary(LIB);
+}
+
+$('#add-input').onchange = (e) => { addFiles([...e.target.files]); e.target.value = ''; };
+let dragDepth = 0;
+const dropReady = (e) => LIB && !$('#library').hidden && e.dataTransfer?.types.includes('Files');
+addEventListener('dragenter', (e) => {
+  if (!dropReady(e)) return;
+  dragDepth++;
+  $('#drop').textContent = `Drop to move into ${LIB.split('/').pop()}`;
+  $('#drop').hidden = false;
+});
+addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').hidden = true; } });
+// always swallow file drops so a stray drop never navigates away from the player
+const hasFiles = (e) => e.dataTransfer?.types.includes('Files');
+addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  $('#drop').hidden = true;
+  if (dropReady(e)) addFiles([...e.dataTransfer.files]);
+});
 
 /* player */
 const video = $('#video');
