@@ -98,6 +98,7 @@ assert s.find_sub(seasons / "Show.S02E01.mkv", seasons).name == "Show.S02E01.srt
 
 # season/language only narrow ambiguous matches; "S2 - 05" carries a season
 assert s.season("[SubsPlease] Show S2 - 05 (1080p).mkv") == 2 and s.season("Show Season 3 - 01.mkv") == 3
+assert s.season("[Group] Show 2nd Season 05 [1080p].mkv") is None and s.season("Show.Season.2.E05.mkv") == 2
 mixed = tmpdir()
 for n in ("Show - S02E05 - Title.mkv", "Title.S01E05.WEBRip.Netflix.ja[cc].srt",
           "Other - 07.mkv", "Other - 07.ja.srt", "Other - 07.en.srt"):
@@ -256,6 +257,11 @@ s.sync = real_sync
 s.STATE["series"][str(ass_show)]["subs"] = None
 s.clear_synced(ass_show / "Show - 03.mkv")
 assert s.synced_path(ass_show / "Show - 03.mkv") is None and (ass_show / "Show - 03.ass").exists()
+
+# hung tools are killed with their children after the timeout
+t0 = time.time()
+r = s.run(["sh", "-c", "sleep 30 & sleep 30"], timeout=1)
+assert r.returncode == -9 and time.time() - t0 < 5 and "timed out" in r.stderr
 
 # real tools on synthetic media: Shift-JIS subtitles sync; card audio prefers the Japanese track
 import shutil as _sh, subprocess as _sp  # noqa: E402

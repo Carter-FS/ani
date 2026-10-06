@@ -199,7 +199,7 @@ const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
 // Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence
 // extraction returns the full subtitle line, which the server matches against.
 const lineHTML = (parts) => parts.map((s) => esc(s).replace(DELIM, (c) => `<span style="--s: '\\${c === '"' ? '&quot;' : c}'"></span>`)).join('<span class="nl"></span>');
-const epLabel = (e) => `${e.season ? `S${e.season} ` : ''}Episode ${e.ep ?? '?'}`;
+const epLabel = (e) => `${e.season != null ? `S${e.season} ` : ''}Episode ${e.ep ?? '?'}`;
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 /* theme */
@@ -410,12 +410,13 @@ function render() {
     const box = $('#lines');
     // keep following unless the user scrolled away from the newest line
     const prev = P.shown > 0 ? P.els[P.shown - 1] : null;
-    const follow = P.shown < 0 || !prev || Math.abs(n - P.shown) > 3 ||  // a seek re-centres
+    const follow = P.shown < 0 || !prev || P.seeked ||  // a seek re-centres
       (prev.offsetTop + prev.offsetHeight > box.scrollTop && prev.offsetTop < box.scrollTop + box.clientHeight);
     // only touch lines whose visibility changed (all of them after a reset)
     const [lo, hi] = P.shown < 0 ? [0, P.els.length] : [Math.min(n, P.shown), Math.max(n, P.shown)];
     for (let i = lo; i < hi; i++) P.els[i].hidden = i >= n;
     P.shown = n;
+    P.seeked = false;
     // scroll only the transcript; scrollIntoView would also nudge the page and the video
     if (follow && n) box.scrollTo({ top: P.els[n - 1].offsetTop - box.clientHeight / 2, behavior: 'smooth' });
   }
@@ -470,6 +471,7 @@ if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
   const onFrame = () => { render(); video.requestVideoFrameCallback(onFrame); };
   video.requestVideoFrameCallback(onFrame);
 }
+video.addEventListener('seeking', () => { P.seeked = true; });
 video.addEventListener('seeked', render);
 video.addEventListener('play', () => { P.hoverPaused = false; $('#upnext').hidden = true; });
 video.addEventListener('pause', saveProgress);

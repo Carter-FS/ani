@@ -10,6 +10,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -40,23 +41,42 @@ WATCHED = 0.9
 SETTLE = 60  # seconds a file must be unmodified before background sync (still downloading otherwise)
 
 
-# Background work (season sync, thumbnails) runs at low CPU and disk priority so playback never hitches.
-if sys.platform == "darwin" and shutil.which("taskpolicy"):
-    LOW_PRIORITY = ["taskpolicy", "-b"]
-else:
-    LOW_PRIORITY = (["nice", "-n", "10"] if shutil.which("nice") else []) + \
-                   (["ionice", "-c", "3"] if shutil.which("ionice") else [])
+# Background work (season sync, thumbnails) runs at low CPU priority so playback never hitches.
+# CPU only: disk throttling (taskpolicy -b, ionice idle) made background syncs up to 25x slower,
+# and a play of an episode already syncing in the background waits for that run.
+LOW_PRIORITY = ["nice", "-n", "10"] if shutil.which("nice") else []
 
 
-def run(cmd, low=False):
-    """Run a tool without a terminal: no stdin (ffmpeg would grab the tty), output captured."""
+CHILDREN = set()  # tool processes in flight, killed on shutdown so none are orphaned
+
+
+def kill_group(p):
+    try:
+        os.killpg(p.pid, signal.SIGKILL)  # the tool and anything it started (alass runs ffmpeg)
+    except OSError:
+        pass
+
+
+def run(cmd, low=False, timeout=600):
+    """Run a tool without a terminal (ffmpeg would grab the tty), capturing output. A run that
+    hangs (e.g. on a file still being written) is killed after `timeout` seconds."""
     if low:
         cmd = LOW_PRIORITY + cmd
     try:
-        return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              errors="replace")
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors="replace", start_new_session=True)
     except OSError as e:  # tool not installed
         return subprocess.CompletedProcess(cmd, 127, "", str(e))
+    CHILDREN.add(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+    except subprocess.TimeoutExpired:
+        kill_group(p)
+        out, err = p.communicate()
+        return subprocess.CompletedProcess(cmd, -9, out, f"{err}\nerror: timed out after {timeout}s")
+    finally:
+        CHILDREN.discard(p)
 
 
 # --- subtitles -------------------------------------------------------------
@@ -227,7 +247,8 @@ def episode(name):
 
 
 SEASON = re.compile(r"S(\d+)\s*E\d|(?<![\dx])(\d{1,2})x\d{2,3}(?!\d)"
-                    r"|(?<![A-Za-z0-9])S(\d{1,2})\s*-\s*\d|Season\s*(\d{1,2})", re.I)
+                    r"|(?<![A-Za-z0-9])S(\d{1,2})\s*-\s*\d"
+                    r"|(?<!\d(?:st|nd|rd|th)[\s._])Season[\s._]*(\d{1,2})(?!\d)", re.I)  # not "2nd Season 05"
 
 
 def season(name):
@@ -443,6 +464,7 @@ def ensure_synced(video, retry=True, background=False):
             except OSError as e:
                 print(f"couldn't save synced subtitle for {video.name}: {e}", flush=True)
                 part.unlink(missing_ok=True)
+                FAILED[video] = fail_key(video, sub)
                 return sub
         part.unlink(missing_ok=True)  # subtitle source changed or a resync was requested meanwhile
     return ensure_synced(video, retry=False, background=background) if retry else source_sub(video)
@@ -548,23 +570,28 @@ THUMB_SLOTS = threading.Semaphore(3)  # bound concurrent ffmpeg runs from a libr
 
 
 def thumb(video):
-    out = THUMBS / (hashlib.sha1(f"{video}|{signature(video)}".encode()).hexdigest() + ".jpg")
+    key = hashlib.sha1(str(video).encode()).hexdigest()
+    out = THUMBS / f"{key}-{hashlib.sha1(str(signature(video)).encode()).hexdigest()[:12]}.jpg"
     if out.exists():
         return out
     with THUMB_SLOTS:
         if out.exists():
             return out
         THUMBS.mkdir(parents=True, exist_ok=True)
-        r = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)], low=True)
+        r = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)],
+                low=True, timeout=30)
         try:
             at = float(r.stdout) * 0.3
         except ValueError:
             return None
         part = out.with_name(f".{out.stem}.{threading.get_ident()}.jpg")
         run([FFMPEG, "-nostdin", "-v", "error", "-y", "-ss", f"{at:.1f}", "-i", str(video),
-             "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(part)], low=True)
+             "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(part)], low=True, timeout=60)
         if part.exists():
             part.replace(out)
+            for stale in THUMBS.glob(f"{key}-*.jpg"):  # older thumbnails of this file (taken mid-download)
+                if stale != out:
+                    stale.unlink(missing_ok=True)
     return out if out.exists() else None
 
 
@@ -599,7 +626,7 @@ def clock():
 def audio_stream(file):
     """ffmpeg map for the audio the browser plays: Japanese, else the default track, else the first."""
     r = run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
-             "stream_tags=language:stream_disposition=default", "-of", "json", file])
+             "stream_tags=language:stream_disposition=default", "-of", "json", file], timeout=30)
     try:
         streams = json.loads(r.stdout).get("streams", [])
     except ValueError:
@@ -639,7 +666,7 @@ def take_screenshot(src, start, end):
     file = f"autocards-{token()}.jpg"
     path = STATE_DIR / file
     run([FFMPEG, "-nostdin", "-v", "error", "-ss", f"{0.75 * start + 0.25 * end:.3f}", "-i", src,
-         "-frames:v", "1", "-vf", "scale=iw/2:-2", "-q:v", "4", str(path)])
+         "-frames:v", "1", "-vf", "scale=iw/2:-2", "-q:v", "4", str(path)], timeout=60)
     return store_media(file, path)
 
 
@@ -647,7 +674,7 @@ def take_audio(src, start, end, stream="0:a:0"):
     file = f"autocards-{token()}.mp3"
     path = STATE_DIR / file
     run([FFMPEG, "-nostdin", "-v", "error", "-ss", f"{max(start, 0):.3f}", "-t", f"{max(end - start, 0.1):.3f}",
-         "-i", src, "-map", stream, "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(path)])
+         "-i", src, "-map", stream, "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(path)], timeout=60)
     return store_media(file, path)
 
 
@@ -959,4 +986,8 @@ if __name__ == "__main__":
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     print(f"ani server on http://127.0.0.1:{PORT}", flush=True)
     with ThreadingHTTPServer(("127.0.0.1", PORT), Server) as server:
-        server.serve_forever()
+        try:
+            server.serve_forever()
+        finally:
+            for child in list(CHILDREN):
+                kill_group(child)
