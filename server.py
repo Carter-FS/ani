@@ -167,7 +167,11 @@ NOISE = re.compile(
     r"|\b(?:AAC|E?-?AC-?3|DDP?|FLAC|Opus|DTS(?:-HD)?|TrueHD|LPCM)\s*\d\.\d\b"  # audio channels
     r"|\b[HhXx]\.?26[45]\b|\b\d+\s*bits?\b|\b\d{3,4}[pPiI]\b|\b[257]\.[01]\b", re.I)
 BRACKET_EP = re.compile(r"\[(\d{1,4}(?:\.5)?)(?:v\d)?(?:\s*END)?\]", re.I)  # "[Show][05][1080p]"
-SPECIAL = re.compile(r"\b(?:OVA|OAD|ONA|SP|Specials?|NCOP|NCED|PV|Preview|Menu|Movie)\s*[-_.]?\s*\d", re.I)
+KEYWORD = r"(?:OVA|OAD|ONA|SP|Specials?|NCOP\d*|NCED\d*|PV|Preview|Menu|Movie)"
+SPECIAL = re.compile(rf"\b{KEYWORD}\s*[-_.]?\s*\d", re.I)        # "OVA 01", "NCOP1"
+SPECIAL_TAG = re.compile(rf"\[{KEYWORD}\]", re.I)                  # "[Show][OVA][01]"
+SPECIAL_AFTER = re.compile(rf"[\s._]*{KEYWORD}\b", re.I)            # "Show - 01 NCOP", not "- 01 - Title"
+SPECIAL_WORD = re.compile(rf"\b{KEYWORD}\b", re.I)
 DASH_EP = re.compile(r"\s-\s(\d{1,4}(?:\.5)?)(?:v\d)?(?=$|[\s._-])")
 TOKEN = re.compile(r"^(\d{1,4}(?:·5)?)(?:v\d)?$")
 
@@ -183,16 +187,20 @@ def episode(name):
     for pat in EP_PATTERNS:
         if m := re.search(pat, stem, re.IGNORECASE):
             return int(m.group(1))
+    if SPECIAL_TAG.search(stem):
+        return None  # OVAs/creditless etc. must not collide with regular episode numbers
     bare = NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem))
     if SPECIAL.search(bare):
-        return None  # OVAs/creditless etc. must not collide with regular episode numbers
+        return None
     if m := DASH_EP.search(bare):  # first " - N": later ones are usually episode titles
-        return _num(m.group(1))
+        return None if SPECIAL_AFTER.match(bare, m.end()) else _num(m.group(1))
     # last standalone number that isn't a year, e.g. "Show_03", "Show.05", "Mob Psycho 100 03"
     bare = re.sub(r"(\d)\.5(?!\d)", r"\1·5", bare)
-    nums = [m.group(1) for t in re.split(r"[\s._\-#＃]+", bare)
-            if (m := TOKEN.match(t)) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]  # skip years
-    return _num(nums[-1]) if nums else None
+    nums = [(m.group(1), t.end()) for t in re.finditer(r"[^\s._\-#＃]+", bare)
+            if (m := TOKEN.match(t.group())) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]  # skip years
+    if not nums or SPECIAL_WORD.search(bare, nums[-1][1]):
+        return None  # "Show 2 - OVA": the only number belongs to the series name
+    return _num(nums[-1][0])
 
 
 def visible(f):
@@ -362,10 +370,14 @@ def ensure_synced(video):
         if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
             return sub
         if out := sync(video, sub):
-            if source_sub(video) == sub:
+            try:
+                same = source_sub(video) == sub
+            except (LookupError, OSError):
+                same = False
+            if same:
                 return out
             clear_synced(video)  # source changed while alass ran; background sync redoes it
-            return source_sub(video)
+            return source_sub(video)  # raises if it is now missing or ambiguous
         FAILED[video] = fail_key(video, sub)
     return sub
 
@@ -805,7 +817,8 @@ class Server(BaseHTTPRequestHandler):
                         STATE["overrides"][str(video)] = sub_file
                         clear_synced(video)
                     if body.get("resync"):
-                        clear_synced(video)
+                        with SYNC_LOCKS[video]:  # let a running sync finish, then discard it
+                            clear_synced(video)
                         FAILED.pop(video, None)
                 save_state()
             self.send(body={"ok": True})

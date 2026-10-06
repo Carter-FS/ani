@@ -192,7 +192,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('ani.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('ani.' + k, JSON.stringify(v)); } catch {} },
 };
-const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
+const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const esc = (s) => s.replace(/<[^>]*>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
 // Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence

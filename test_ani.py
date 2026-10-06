@@ -59,6 +59,14 @@ cases = {
     "Shokugeki no Souma - 05 - The Menu.mkv": 5,
     "Show - 12 - Something Special [1080p].mkv": 12,
     "Show - 05 - Preview of Doom.mkv": 5,
+    "Show - 05 - The OVA Club.mkv": 5,
+    "Show 2 - OVA.mkv": None,
+    "Show Season 2 - OVA.mkv": None,
+    "[Group] Show 2 - NCED [1080p].mkv": None,
+    "[Group] Show 3 OVA [1080p].mkv": None,
+    "Show - 01 NCOP.mkv": None,
+    "[Nekomoe][Show][OVA][01][1080p].mkv": None,
+    "[Show][SP][02][1080p].mkv": None,
     "no number here.mkv": None,
 }
 for name, want in cases.items():
