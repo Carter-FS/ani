@@ -110,6 +110,8 @@ def main():
         call("/register", reg)
     except urllib.error.HTTPError as e:
         sys.exit(f"ani: {json.load(e).get('error', e)}")
+    except OSError as e:
+        sys.exit(f"ani: server stopped responding ({e}); see {STATE_DIR / 'server.log'}")
     open_url(("/?v=" if is_video else "/?dir=") + quote(str(target)))
 
 

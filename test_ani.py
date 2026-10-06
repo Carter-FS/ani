@@ -51,6 +51,14 @@ cases = {
     "[Group] Show - OVA 01.mkv": None,
     "Show - OVA - 01.mkv": None,
     "Show - NCOP1.mkv": None,
+    "[VCB-Studio] Show [05][Ma10p_1080p][x265_flac].mkv": 5,
+    "[Nekomoe kissaten][Show][05][1080p][JPSC].mp4": 5,
+    "[Sakurato] Show [05v2][1080p].mkv": 5,
+    "[Group][Show][12 END][1080p].mkv": 12,
+    "Special A - 05.mkv": 5,
+    "Shokugeki no Souma - 05 - The Menu.mkv": 5,
+    "Show - 12 - Something Special [1080p].mkv": 12,
+    "Show - 05 - Preview of Doom.mkv": 5,
     "no number here.mkv": None,
 }
 for name, want in cases.items():
@@ -69,6 +77,9 @@ assert lines[2][2] == "0:01:00"  # 59.6s rounds to a valid label
 # no blank lines between cues; text after a blank line is not part of the cue
 tight = "1\n00:00:01,000 --> 00:00:02,000\nA\n2\n00:00:03,000 --> 00:00:04,000\nB\n\nstray\n"
 assert [ln[0] for ln in s.parse_srt(tight)] == [["A"], ["B"]], s.parse_srt(tight)
+# a closed cue whose text is a number keeps it (not mistaken for the next index)
+nums = "1\n00:00:01,000 --> 00:00:02,000\n３\n\n2\n00:00:03,000 --> 00:00:04,000\n残り\n100\n\n3\n00:00:05,000 --> 00:00:06,000\nはい\n"
+assert [ln[0] for ln in s.parse_srt(nums)] == [["３"], ["残り", "100"], ["はい"]], s.parse_srt(nums)
 # vector drawings with unclosed tags can't stall the parser
 t0 = time.time()
 s.clean("{\\p1" * 5000)
@@ -167,6 +178,24 @@ assert s.ensure_synced(ass_show / "Show - 03.mkv") == ass_show / "Show - 03.ani.
 assert s.synced_path(ass_show / "Show - 03.mkv") == ass_show / "Show - 03.ani.ass"
 assert s.make_session("v", ass_show / "Show - 03.ani.ass").lines[0][0] == ["はい", "いいえ"]
 assert s.find_sub(ass_show / "Show - 03.mkv", ass_show).name == "Show - 03.ass"  # own output ignored
+# subtitle source changed while alass ran: the stale result is discarded
+s.clear_synced(ass_show / "Show - 03.mkv")
+alt = tmpdir()
+(alt / "Show - 03.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nx\n")
+real_sync = s.sync
+
+
+def switching_sync(video, sub):
+    out = real_sync(video, sub)
+    s.STATE["series"][str(ass_show)]["subs"] = str(alt)  # e.g. /register mid-run
+    return out
+
+
+s.sync = switching_sync
+assert s.ensure_synced(ass_show / "Show - 03.mkv") == alt / "Show - 03.srt"
+assert s.synced_path(ass_show / "Show - 03.mkv") is None
+s.sync = real_sync
+s.STATE["series"][str(ass_show)]["subs"] = None
 s.clear_synced(ass_show / "Show - 03.mkv")
 assert s.synced_path(ass_show / "Show - 03.mkv") is None and (ass_show / "Show - 03.ass").exists()
 

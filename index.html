@@ -192,6 +192,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('ani.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('ani.' + k, JSON.stringify(v)); } catch {} },
 };
+const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 const esc = (s) => s.replace(/<[^>]*>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
 // Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence
@@ -236,7 +237,7 @@ async function showLibrary(dir) {
   $('#crumb').textContent = data.name || '';
   LIB = data.dir || null;
   if (!data.dir) {
-    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${esc(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
+    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${escAttr(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
     lib.innerHTML = data.missing
       ? `<h1>Library</h1><p class="empty">Folder not found: <code>${esc(data.missing)}</code>. It may have been moved or unmounted.</p>${pick}`
       : `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>${pick}`;
@@ -248,7 +249,7 @@ async function showLibrary(dir) {
   lib.innerHTML = `
     <h1>${esc(data.name)}</h1>
     <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
-      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${esc(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
+      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
     <div class="actions">
       ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
       <button class="ghost" id="add" title="Or drop files anywhere on this page">+ Add episodes</button>
@@ -413,12 +414,20 @@ function render() {
 
 function seekLine(delta) {
   const ms = (video.currentTime - P.delay) * 1000;
-  let i = bisect(P.starts, ms) - 1;
-  if (delta < 0 && i >= 0 && ms - P.starts[i] < 800) i--; // near a line's start: go to the one before
-  if (delta > 0) i++;
-  if (i >= P.lines.length) return;  // already on the last line
-  i = Math.max(0, i);
-  if (P.lines[i]) video.currentTime = P.lines[i][1] / 1000 + P.delay + 0.001;
+  const n = bisect(P.starts, ms);  // cues started so far; P.starts[n] is the next one
+  let target;
+  if (delta > 0) {
+    target = P.starts[n];  // undefined on the last line: stay put
+  } else if (n > 0) {
+    const cur = P.starts[n - 1];
+    target = cur;
+    if (delta < 0 && ms - cur < 800) {  // near a cue's start: go to the previous distinct start
+      let j = n - 1;
+      while (j >= 0 && P.starts[j] >= cur) j--;
+      if (j >= 0) target = P.starts[j];
+    }
+  }
+  if (target !== undefined) video.currentTime = target / 1000 + P.delay + 0.001;
 }
 
 const showOffset = () => { $('#offset').textContent = `${P.delay > 0 ? '+' : ''}${P.delay.toFixed(1)}s`; };

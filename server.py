@@ -95,7 +95,7 @@ def parse_srt(srt):
 
     for row in srt.split("\n"):
         if m := SRT_TIME.search(row):
-            if cur and cur[2] and cur[2][-1].strip().isdigit():
+            if cur and not cur[3][0] and cur[2] and cur[2][-1].strip().isdigit():
                 cur[2].pop()  # that number was this cue's index
             flush()
             g = m.groups()
@@ -166,7 +166,8 @@ NOISE = re.compile(
     r"\[[^\]]*\]|\([^)]*\)|【[^】]*】"                              # groups, resolution, hashes
     r"|\b(?:AAC|E?-?AC-?3|DDP?|FLAC|Opus|DTS(?:-HD)?|TrueHD|LPCM)\s*\d\.\d\b"  # audio channels
     r"|\b[HhXx]\.?26[45]\b|\b\d+\s*bits?\b|\b\d{3,4}[pPiI]\b|\b[257]\.[01]\b", re.I)
-SPECIAL = re.compile(r"\b(?:OVA|OAD|ONA|SP|Specials?|NCOP|NCED|PV|Preview|Menu|Movie)\b", re.I)
+BRACKET_EP = re.compile(r"\[(\d{1,4}(?:\.5)?)(?:v\d)?(?:\s*END)?\]", re.I)  # "[Show][05][1080p]"
+SPECIAL = re.compile(r"\b(?:OVA|OAD|ONA|SP|Specials?|NCOP|NCED|PV|Preview|Menu|Movie)\s*[-_.]?\s*\d", re.I)
 DASH_EP = re.compile(r"\s-\s(\d{1,4}(?:\.5)?)(?:v\d)?(?=$|[\s._-])")
 TOKEN = re.compile(r"^(\d{1,4}(?:·5)?)(?:v\d)?$")
 
@@ -182,7 +183,7 @@ def episode(name):
     for pat in EP_PATTERNS:
         if m := re.search(pat, stem, re.IGNORECASE):
             return int(m.group(1))
-    bare = NOISE.sub(" ", stem)
+    bare = NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem))
     if SPECIAL.search(bare):
         return None  # OVAs/creditless etc. must not collide with regular episode numbers
     if m := DASH_EP.search(bare):  # first " - N": later ones are usually episode titles
@@ -208,6 +209,24 @@ def clear_synced(video):
         video.with_name(video.stem + suf).unlink(missing_ok=True)  # only ever ani's own output
 
 
+SUB_INDEX = {}  # folder -> (file names, {episode: [subtitle files]})
+
+
+def sub_index(where):
+    """Subtitles in a folder by episode number; re-parsed only when its file list changes."""
+    names = sorted(os.listdir(where))
+    cached = SUB_INDEX.get(where)
+    if cached and cached[0] == names:
+        return cached[1]
+    index = defaultdict(list)
+    for name in names:
+        f = where / name
+        if visible(f) and f.suffix.lower() in SUB_EXTS and not name.endswith(SYNCED_SUFFIXES):
+            index[episode(name)].append(f)
+    SUB_INDEX[where] = names, index
+    return index
+
+
 def find_sub(video, where):
     """Subtitle file for `video` from a file or a folder (matched by episode number)."""
     if where.is_file():
@@ -215,9 +234,7 @@ def find_sub(video, where):
     ep = episode(video.name)
     if ep is None:
         raise LookupError(f"no episode number in {video.name}")
-    hits = [f for f in sorted(where.iterdir())
-            if visible(f) and f.suffix.lower() in SUB_EXTS and not f.name.endswith(SYNCED_SUFFIXES)
-            and episode(f.name) == ep]
+    hits = sub_index(where).get(ep, [])
     if len(hits) != 1:
         raise LookupError(f"{len(hits)} subtitles for episode {ep} in {where}")
     return hits[0]
@@ -345,7 +362,10 @@ def ensure_synced(video):
         if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
             return sub
         if out := sync(video, sub):
-            return out
+            if source_sub(video) == sub:
+                return out
+            clear_synced(video)  # source changed while alass ran; background sync redoes it
+            return source_sub(video)
         FAILED[video] = fail_key(video, sub)
     return sub
 
@@ -779,6 +799,8 @@ class Server(BaseHTTPRequestHandler):
                         if str(v) not in STATE["overrides"]:
                             clear_synced(v)
                 if video:
+                    if subs and not sub_file and STATE["overrides"].pop(str(video), None):
+                        clear_synced(video)  # back to folder matching for this video
                     if sub_file and sub_file != STATE["overrides"].get(str(video)):
                         STATE["overrides"][str(video)] = sub_file
                         clear_synced(video)
