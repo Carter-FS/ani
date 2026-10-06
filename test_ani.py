@@ -35,6 +35,22 @@ cases = {
     "Mob Psycho 100 - 04 [1080p].mkv": 4,
     "Show - 05v2 [1080p].mkv": 5,
     "Show - 05.5.mkv": 5.5,
+    "Show - 12 - 2 Years Later [1080p].mkv": 12,
+    "Show - 05 - 100 Days.mkv": 5,
+    "Show - 05 - 1984.mkv": 5,
+    "Show 05 (WEB 1080p AAC 2.0).mkv": 5,
+    "[Group] Show 05 [1080p][AAC2.0].mkv": 5,
+    "Show 05 H.264.mkv": 5,
+    "Show 05 1080p x264 AAC 5.1.mkv": 5,
+    "Show 13.5 [1080p].mkv": 13.5,
+    "Show 05.5.ass": 5.5,
+    "Show 05.ass": 5,
+    "ショー #05.srt": 5,
+    "ショー ＃05.srt": 5,
+    "Mob Psycho 100 03.mkv": 3,
+    "[Group] Show - OVA 01.mkv": None,
+    "Show - OVA - 01.mkv": None,
+    "Show - NCOP1.mkv": None,
     "no number here.mkv": None,
 }
 for name, want in cases.items():
@@ -50,6 +66,13 @@ lines = s.parse_srt(srt)
 assert [ln[0] for ln in lines] == [["こんにちは", "二行目"], ["二番"], ["最後"]], lines
 assert lines[0][1] == 1500 and lines[1][1] == 5000
 assert lines[2][2] == "0:01:00"  # 59.6s rounds to a valid label
+# no blank lines between cues; text after a blank line is not part of the cue
+tight = "1\n00:00:01,000 --> 00:00:02,000\nA\n2\n00:00:03,000 --> 00:00:04,000\nB\n\nstray\n"
+assert [ln[0] for ln in s.parse_srt(tight)] == [["A"], ["B"]], s.parse_srt(tight)
+# vector drawings with unclosed tags can't stall the parser
+t0 = time.time()
+s.clean("{\\p1" * 5000)
+assert time.time() - t0 < 1
 
 # --- ASS: drawings, tag-only and duplicate border layers dropped; no Format line needed
 ass = ("[Script Info]\n[Events]\n"
@@ -58,6 +81,18 @@ ass = ("[Script Info]\n[Events]\n"
        "Dialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,{\\bord3}はい\\Nいいえ\n"
        "Dialogue: 1,0:00:05.00,0:00:06.00,Default,,0,0,0,,はい\\Nいいえ\n")
 assert [ln[0] for ln in s.parse_ass(ass)] == [["はい", "いいえ"]], s.parse_ass(ass)
+# Styles has its own Format line; non-adjacent duplicate layers are dropped too
+ass2 = ("[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: Default,Arial,20\n[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,A\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,B\n"
+        "Dialogue: 1,0:00:01.00,0:00:02.00,Default,,0,0,0,,A\n")
+assert sorted(ln[0][0] for ln in s.parse_ass(ass2)) == ["A", "B"], s.parse_ass(ass2)
+# encodings: UTF-16 and Shift-JIS subtitles load
+enc = tmpdir()
+(enc / "u16.srt").write_bytes("1\n00:00:01,000 --> 00:00:02,000\nはい\n".encode("utf-16"))
+(enc / "sjis.srt").write_bytes("1\n00:00:01,000 --> 00:00:02,000\nはい\n".encode("cp932"))
+assert s.make_session("v", enc / "u16.srt").lines[0][0] == ["はい"]
+assert s.make_session("v", enc / "sjis.srt").lines[0][0] == ["はい"]
 
 # --- card matching: punctuation, whitespace and markup ignored
 assert s.normalize_str("こら…　<b>元気</b>すぎるぞ…") == s.normalize_str("<i>こら</i> 元気すぎるぞ")
@@ -93,10 +128,11 @@ assert s.allowed(str(show / "._Show - 01.mkv")) is None
 assert s.allowed(str(dl / "Show - 02.mkv")) is None  # target folder itself isn't a series
 assert s.episodes(show / "gone") == []
 
-# --- syncing: output name never collides with a user's .ja.srt; failures don't loop
-assert s.synced_path(show / "Show - 01.mkv").name == "Show - 01.ani.srt"
+# --- syncing: own output names; failures don't loop; subtitles added later retry
+assert s.synced_path(show / "Show - 01.mkv") is None
 s.ALASS = "/nonexistent/alass"
 old(show / "Show - 01.mkv")
+old(dl / "Show - 02.mkv")
 calls = []
 real_sync = s.sync
 s.sync = lambda *a: calls.append(a) or real_sync(*a)
@@ -107,11 +143,32 @@ for _ in range(50):
     time.sleep(0.05)
 assert str(show) not in s.BG_DIRS and len(calls) == 1, calls  # ep 2 has no subtitle, ep 1 fails once
 assert s.ensure_synced(show / "Show - 01.mkv") == show / "Show - 01.srt" and len(calls) == 1  # no re-run
-s.FAILED.clear()
-assert s.needs_sync(show / "Show - 01.mkv")
-(dl / "Show - 02.mkv").write_bytes(b"vv")  # fresh write: not settled, so background skips it
 assert not s.needs_sync(show / "Show - 02.mkv")
+(show / "Show - 02.srt").write_text("x")  # subtitle appears later (e.g. copied in Finder)
+assert s.needs_sync(show / "Show - 02.mkv")
+(show / "Show - 01.srt").write_text("changed!")  # replaced subtitle: retry
+assert s.needs_sync(show / "Show - 01.mkv")
+(dl / "Show - 02.mkv").write_bytes(b"vv")  # still downloading: background skips, play uses raw sub
+assert not s.needs_sync(show / "Show - 02.mkv")
+assert s.ensure_synced(show / "Show - 02.mkv") == show / "Show - 02.srt" and len(calls) == 1
 s.sync = real_sync
+
+# alass refuses format conversion, so .ass syncs to .ani.ass (fake alass enforces that)
+fake = tmpdir() / "alass"
+fake.write_text('#!/bin/sh\n[ "${3##*.}" = "${4##*.}" ] && cp "$3" "$4"\n')
+fake.chmod(0o755)
+s.ALASS = str(fake)
+ass_show = tmpdir()
+(ass_show / "Show - 03.mkv").write_bytes(b"v")
+old(ass_show / "Show - 03.mkv")
+(ass_show / "Show - 03.ass").write_text(ass)
+s.STATE["series"][str(ass_show)] = {"subs": None}
+assert s.ensure_synced(ass_show / "Show - 03.mkv") == ass_show / "Show - 03.ani.ass"
+assert s.synced_path(ass_show / "Show - 03.mkv") == ass_show / "Show - 03.ani.ass"
+assert s.make_session("v", ass_show / "Show - 03.ani.ass").lines[0][0] == ["はい", "いいえ"]
+assert s.find_sub(ass_show / "Show - 03.mkv", ass_show).name == "Show - 03.ass"  # own output ignored
+s.clear_synced(ass_show / "Show - 03.mkv")
+assert s.synced_path(ass_show / "Show - 03.mkv") is None and (ass_show / "Show - 03.ass").exists()
 
 # --- card checks: empty sentences never match; multi-card notes filled once; failures retried
 s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"])
@@ -151,9 +208,8 @@ root = tmpdir()
 s.SEARCH_ROOTS = [root / "dl"]
 s.STATE["series"][str(root / "show")] = {"subs": None}
 assert s.find_original("Show - 02.mp4", 10) == [root / "dl" / "nested" / "Show - 02.mp4"]
-s.FAILED[Path("x")] = (0, 0)
 assert s.adopt(str(root / "show"), "Show - 02.mp4", 10) == root / "show" / "Show - 02.mp4"
-assert not (root / "dl" / "nested" / "Show - 02.mp4").exists() and not s.FAILED
+assert not (root / "dl" / "nested" / "Show - 02.mp4").exists()
 assert s.adopt(str(root / "show"), "Show - 02.mp4", 10) == root / "show" / "Show - 02.mp4"  # idempotent
 for bad in [("/nope", "a.mp4", 1), (str(root / "show"), "a.exe", 1), (str(root / "show"), "missing.mp4", 1),
             (str(root / "show"), "../../etc/x.mp4", 1), (str(root / "show"), "._x.mp4", 1)]:

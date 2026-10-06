@@ -34,15 +34,18 @@ ALASS = shutil.which("alass-cli") or shutil.which("alass") or "alass-cli"
 
 VIDEO_EXTS = {".mp4", ".m4v", ".mkv", ".webm", ".mov"}
 SUB_EXTS = {".srt", ".ass"}
-SYNCED_SUFFIX = ".ani.srt"
+SYNCED_SUFFIXES = (".ani.srt", ".ani.ass")
 WATCHED = 0.9
 SETTLE = 60  # seconds a file must be unmodified before background sync (still downloading otherwise)
 
 
 def run(cmd):
     """Run a tool without a terminal: no stdin (ffmpeg would grab the tty), output captured."""
-    return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                          errors="replace")
+    try:
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              errors="replace")
+    except OSError as e:  # tool not installed
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
 
 
 # --- subtitles -------------------------------------------------------------
@@ -58,12 +61,19 @@ def label(ms):
 
 
 TAGS = re.compile(r"<[^>]*>|\{[^}]*\}")
-ASS_DRAWING = re.compile(r"\{[^}]*\\p[1-9][^}]*\}.*?(?=\{[^}]*\\p0[^}]*\}|$)", re.S)
 
 
 def clean(text):
-    """Subtitle text lines without markup; empty lines dropped."""
-    text = TAGS.sub("", ASS_DRAWING.sub("", text))
+    """Subtitle text lines without markup or ASS drawings; empty lines dropped."""
+    out, drawing = [], False
+    for piece in re.split(r"(\{[^}]*\})", text):
+        if piece.startswith("{") and piece.endswith("}"):
+            if modes := re.findall(r"\\p(\d)", piece):  # \p1.. starts a vector drawing, \p0 ends it
+                drawing = modes[-1] != "0"
+            continue
+        if not drawing:
+            out.append(piece)
+    text = re.sub(r"<[^>]*>", "", "".join(out))
     return [t.strip() for t in text.split("\n") if t.strip()]
 
 
@@ -75,22 +85,28 @@ SRT_TIME = re.compile(r"(\d+):(\d{1,2}):(\d{1,2})[,.](\d{1,3})\s*-->\s*(\d+):(\d
 
 
 def parse_srt(srt):
-    """Lenient SRT: blocks without a timestamp line are skipped, not fatal."""
-    lines = []
-    for block in re.split(r"\n\s*\n", srt.strip()):
-        rows = block.split("\n")
-        for i, row in enumerate(rows):
-            m = SRT_TIME.search(row)
-            if m:
-                break
-        else:
-            continue
-        g = m.groups()
-        start = to_ms(int(g[0]), int(g[1]), int(g[2]), int(g[3].ljust(3, "0")))
-        end = to_ms(int(g[4]), int(g[5]), int(g[6]), int(g[7].ljust(3, "0")))
-        parts = clean("\n".join(rows[i + 1:]))
-        if parts:
-            lines.append(cue(parts, start, end))
+    """Lenient SRT: cues start at timestamp lines and end at a blank line, so missing or
+    extra blank lines, missing indices and junk blocks never merge or drop cues."""
+    lines, cur = [], None
+
+    def flush():
+        if cur and (parts := clean("\n".join(cur[2]))):
+            lines.append(cue(parts, cur[0], cur[1]))
+
+    for row in srt.split("\n"):
+        if m := SRT_TIME.search(row):
+            if cur and cur[2] and cur[2][-1].strip().isdigit():
+                cur[2].pop()  # that number was this cue's index
+            flush()
+            g = m.groups()
+            cur = (to_ms(int(g[0]), int(g[1]), int(g[2]), int(g[3].ljust(3, "0"))),
+                   to_ms(int(g[4]), int(g[5]), int(g[6]), int(g[7].ljust(3, "0"))), [], [False])
+        elif not row.strip():
+            if cur:
+                cur[3][0] = True  # a blank line ends the cue's text
+        elif cur and not cur[3][0]:
+            cur[2].append(row)
+    flush()
     lines.sort(key=lambda x: x[1])
     return lines
 
@@ -102,9 +118,12 @@ def parse_ass(ass):
         return to_ms(int(h), int(m), int(s), int(cs.ljust(2, "0")[:2]) * 10)
 
     lines, cols = [], ["layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text"]
+    section = ""
     for line in ass.splitlines():
         line = line.strip()
-        if line.startswith("Format:"):
+        if line.startswith("["):
+            section = line.lower()
+        elif line.startswith("Format:") and section == "[events]":
             cols = [x.strip().lower() for x in line[7:].split(",")]
         elif line.startswith("Dialogue:"):
             parts = line[9:].split(",", len(cols) - 1)
@@ -119,10 +138,12 @@ def parse_ass(ass):
             if parts := clean(text):
                 lines.append(cue(parts, start, end))
     lines.sort(key=lambda x: x[1])
-    # fansubs duplicate lines across layers for borders; keep one
-    out = []
+    # fansubs duplicate lines across layers for borders; keep one of each
+    seen, out = set(), []
     for ln in lines:
-        if not out or (ln[0], ln[1], ln[3]) != (out[-1][0], out[-1][1], out[-1][3]):
+        key = (tuple(ln[0]), ln[1], ln[3])
+        if key not in seen:
+            seen.add(key)
             out.append(ln)
     return out
 
@@ -141,23 +162,36 @@ EP_PATTERNS = [
     r"第(\d+)話",
     r"(?:^|[\s._\-\[(])E[Pp]?\.?\s*(\d{1,4})(?=$|[\s._\-\])v])",
 ]
-DASH_EP = re.compile(r"\s-\s(\d{1,4}(?:\.\d)?)(?:v\d)?(?=$|[\s\[(._-])")
-TOKEN = re.compile(r"^(\d{1,4})(?:v\d)?$")
+NOISE = re.compile(
+    r"\[[^\]]*\]|\([^)]*\)|【[^】]*】"                              # groups, resolution, hashes
+    r"|\b(?:AAC|E?-?AC-?3|DDP?|FLAC|Opus|DTS(?:-HD)?|TrueHD|LPCM)\s*\d\.\d\b"  # audio channels
+    r"|\b[HhXx]\.?26[45]\b|\b\d+\s*bits?\b|\b\d{3,4}[pPiI]\b|\b[257]\.[01]\b", re.I)
+SPECIAL = re.compile(r"\b(?:OVA|OAD|ONA|SP|Specials?|NCOP|NCED|PV|Preview|Menu|Movie)\b", re.I)
+DASH_EP = re.compile(r"\s-\s(\d{1,4}(?:\.5)?)(?:v\d)?(?=$|[\s._-])")
+TOKEN = re.compile(r"^(\d{1,4}(?:·5)?)(?:v\d)?$")
+
+
+def _num(text):
+    n = float(text.replace("·", "."))
+    return int(n) if n.is_integer() else n
 
 
 def episode(name):
-    """Episode number from a release name (int, or float for specials like 5.5), else None."""
+    """Episode number from a release name (int, or float for .5 specials), else None."""
     stem = Path(name).stem
     for pat in EP_PATTERNS:
         if m := re.search(pat, stem, re.IGNORECASE):
             return int(m.group(1))
-    if dash := DASH_EP.findall(stem):
-        n = float(dash[-1])
-        return int(n) if n.is_integer() else n
-    # last standalone number that isn't a year, e.g. "[Group]_Show_03_(1280x720)", "Show.05"
-    nums = [int(m.group(1)) for t in re.split(r"[\s._\[\]()\-]+", stem)
-            if (m := TOKEN.match(t)) and not (len(m.group(1)) == 4 and 1900 <= int(m.group(1)) <= 2099)]
-    return nums[-1] if nums else None
+    bare = NOISE.sub(" ", stem)
+    if SPECIAL.search(bare):
+        return None  # OVAs/creditless etc. must not collide with regular episode numbers
+    if m := DASH_EP.search(bare):  # first " - N": later ones are usually episode titles
+        return _num(m.group(1))
+    # last standalone number that isn't a year, e.g. "Show_03", "Show.05", "Mob Psycho 100 03"
+    bare = re.sub(r"(\d)\.5(?!\d)", r"\1·5", bare)
+    nums = [m.group(1) for t in re.split(r"[\s._\-#＃]+", bare)
+            if (m := TOKEN.match(t)) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]  # skip years
+    return _num(nums[-1]) if nums else None
 
 
 def visible(f):
@@ -165,7 +199,13 @@ def visible(f):
 
 
 def synced_path(video):
-    return video.with_name(video.stem + SYNCED_SUFFIX)
+    """ani's synced subtitle for `video` if one exists, else None."""
+    return next((p for suf in SYNCED_SUFFIXES if (p := video.with_name(video.stem + suf)).exists()), None)
+
+
+def clear_synced(video):
+    for suf in SYNCED_SUFFIXES:
+        video.with_name(video.stem + suf).unlink(missing_ok=True)  # only ever ani's own output
 
 
 def find_sub(video, where):
@@ -176,34 +216,39 @@ def find_sub(video, where):
     if ep is None:
         raise LookupError(f"no episode number in {video.name}")
     hits = [f for f in sorted(where.iterdir())
-            if visible(f) and f.suffix.lower() in SUB_EXTS and not f.name.endswith(SYNCED_SUFFIX)
+            if visible(f) and f.suffix.lower() in SUB_EXTS and not f.name.endswith(SYNCED_SUFFIXES)
             and episode(f.name) == ep]
     if len(hits) != 1:
         raise LookupError(f"{len(hits)} subtitles for episode {ep} in {where}")
     return hits[0]
 
 
-def sync(video, sub, out):
-    """Align `sub` to the video's audio with alass. Returns False (writing nothing) on failure."""
+def sync(video, sub):
+    """Align `sub` to the video's audio with alass; returns the synced file or None."""
     print(f"syncing {sub.name}", flush=True)
-    # alass trips on [] in paths, so run it on clean symlinks.
+    out = video.with_name(video.stem + ".ani" + sub.suffix.lower())
+    # alass trips on [] in paths, so run it on clean symlinks; it also refuses format
+    # conversion, so the output keeps the subtitle's own extension.
     # fps guessing off: it misfires on releases with equal frame rates (e.g. 25/23.976).
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            v, s, o = Path(tmp, "v" + video.suffix), Path(tmp, "s" + sub.suffix), Path(tmp, "o.srt")
+            v, s, o = (Path(tmp, "v" + video.suffix), Path(tmp, "s" + sub.suffix.lower()),
+                       Path(tmp, "o" + sub.suffix.lower()))
             v.symlink_to(video)
             s.symlink_to(sub)
             r = run([ALASS, "--disable-fps-guessing", str(v), str(s), str(o)])
             if r.returncode != 0 or not o.exists():
-                print(f"alass failed on {video.name}: {r.stderr.strip().splitlines()[-1:]}", flush=True)
-                return False
+                msg = f"{r.stderr}\n{r.stdout}"
+                why = [ln.strip() for ln in msg.splitlines() if ln.strip().startswith(("error", "caused by"))]
+                print(f"alass failed on {video.name}: {' / '.join(why[:3]) or msg.strip()[-200:]}", flush=True)
+                return None
             part = out.with_name(f".{out.name}.part")
             shutil.copyfile(o, part)
             part.replace(out)  # atomic, so /play never reads a half-written file
-            return True
+            return out
     except OSError as e:
         print(f"sync failed on {video.name}: {e}", flush=True)
-        return False
+        return None
 
 
 # --- state -----------------------------------------------------------------
@@ -224,6 +269,7 @@ STATE = load_json(STATE_PATH, {})
 STATE.setdefault("series", {})     # video dir -> {"subs": subtitle dir or None}
 STATE.setdefault("overrides", {})  # video path -> subtitle file
 STATE.setdefault("progress", {})   # video path -> {"pos": s, "dur": s}
+STATE.setdefault("offsets", {})    # video dir -> subtitle offset in seconds
 
 
 def save_state():
@@ -253,12 +299,12 @@ def allowed(path):
     return None
 
 
-FAILED = {}  # video path -> (size, mtime) when its sync last failed
+FAILED = {}  # video -> fail_key when its sync last failed
 SYNC_LOCKS = defaultdict(threading.Lock)
 
 
-def signature(video):
-    st = video.stat()
+def signature(path):
+    st = path.stat()
     return st.st_size, st.st_mtime
 
 
@@ -266,39 +312,41 @@ def settled(video):
     return time.time() - video.stat().st_mtime > SETTLE
 
 
-def needs_sync(video):
-    """Unsynced, finished downloading, and not already failed in its current state."""
-    try:
-        return (not synced_path(video).exists() and settled(video)
-                and FAILED.get(video) != signature(video))
-    except OSError:
-        return False
-
-
 def source_sub(video):
     src = STATE["overrides"].get(str(video)) or STATE["series"].get(str(video.parent), {}).get("subs")
     return find_sub(video, Path(src) if src else video.parent)
 
 
-def ensure_synced(video):
-    """Synced subtitle path, or the unsynced source when syncing failed or isn't possible yet."""
-    out = synced_path(video)
-    if out.exists():
-        return out
-    sig = signature(video)
+def fail_key(video, sub):
+    """Changes when the video finishes downloading or its subtitle is added or replaced."""
+    return signature(video), str(sub), signature(sub)
+
+
+def needs_sync(video):
+    """Unsynced, has a subtitle, finished downloading, and not already failed as-is."""
     try:
-        sub = source_sub(video)
+        if synced_path(video) or not settled(video):
+            return False
+        return FAILED.get(video) != fail_key(video, source_sub(video))
     except (LookupError, OSError):
-        FAILED[video] = sig
-        raise
-    if FAILED.get(video) == sig:
+        return False
+
+
+def ensure_synced(video):
+    """Synced subtitle, or the unsynced source when syncing failed or the file is still downloading."""
+    if out := synced_path(video):
+        return out
+    sub = source_sub(video)  # LookupError/OSError: no subtitle to show at all
+    if not settled(video) or FAILED.get(video) == fail_key(video, sub):
         return sub
     with SYNC_LOCKS[video]:
-        if out.exists():
+        if out := synced_path(video):
             return out
-        if sync(video, sub, out):
+        if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
+            return sub
+        if out := sync(video, sub):
             return out
-    FAILED[video] = sig
+        FAILED[video] = fail_key(video, sub)
     return sub
 
 
@@ -370,7 +418,6 @@ def adopt(folder, name, size, mtime_ms=None):
     if len(hits) > 1:
         raise LookupError(f"{len(hits)} files named {name}; move it with the CLI instead")
     shutil.move(hits[0], dest)
-    FAILED.clear()  # a new subtitle can make earlier failures syncable
     print(f"moved {hits[0]} -> {dest}", flush=True)
     return dest
 
@@ -455,7 +502,8 @@ def make_session(file, sub_path):
     lines = []
     if sub_path:
         raw = Path(sub_path).read_bytes()
-        for enc in ("utf-8-sig", "cp932"):  # cp932: Shift-JIS subtitles are common for Japanese
+        encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp932")
+        for enc in encodings:  # cp932: Shift-JIS subtitles are common for Japanese
             try:
                 content = raw.decode(enc)
                 break
@@ -659,7 +707,7 @@ class Server(BaseHTTPRequestHandler):
             for v in episodes(folder):
                 pos, dur = progress(v)
                 eps.append({"path": str(v), "ep": episode(v.name), "name": v.stem,
-                            "synced": synced_path(v).exists(), "pos": pos, "dur": dur,
+                            "synced": bool(synced_path(v)), "pos": pos, "dur": dur,
                             "watched": is_watched(v)})
             self.send(body={"dir": folder, "name": Path(folder).name, "episodes": eps,
                             "series": series, "syncing": folder in BG_DIRS,
@@ -709,21 +757,35 @@ class Server(BaseHTTPRequestHandler):
             sync_season(body["dir"])
             self.send(body={"path": str(dest)})
         elif path == "/register":
+            folder = Path(body["dir"]).resolve()
+            if not folder.is_dir():
+                raise BadRequest(f"not a folder: {folder}")
+            video = None
+            if body.get("video"):  # validate everything before touching state
+                p = Path(body["video"])
+                video = p.parent.resolve() / p.name
+                if video.suffix.lower() not in VIDEO_EXTS:
+                    raise BadRequest(f"unsupported video type {video.suffix or '(none)'}; "
+                                     f"supported: {', '.join(sorted(VIDEO_EXTS))}")
+                if video.parent != folder or not video.is_file():
+                    raise BadRequest("video is not in the series folder")
+            subs = str(Path(body["subs"]).resolve()) if body.get("subs") else None
+            sub_file = str(Path(body["sub_file"]).resolve()) if body.get("sub_file") else None
             with STATE_LOCK:
-                folder = str(Path(body["dir"]).resolve())
-                entry = STATE["series"].setdefault(folder, {"subs": None})
-                if body.get("subs"):
-                    entry["subs"] = str(Path(body["subs"]).resolve())
-                if body.get("video"):
-                    video = allowed(body["video"])
-                    if not video:
-                        raise BadRequest("video is not in the series folder")
-                    if body.get("sub_file"):
-                        STATE["overrides"][str(video)] = str(Path(body["sub_file"]).resolve())
+                entry = STATE["series"].setdefault(str(folder), {"subs": None})
+                if subs and subs != entry.get("subs"):
+                    entry["subs"] = subs
+                    for v in episodes(folder):  # new subtitle source: earlier syncs are stale
+                        if str(v) not in STATE["overrides"]:
+                            clear_synced(v)
+                if video:
+                    if sub_file and sub_file != STATE["overrides"].get(str(video)):
+                        STATE["overrides"][str(video)] = sub_file
+                        clear_synced(video)
                     if body.get("resync"):
-                        synced_path(video).unlink(missing_ok=True)  # only ever ani's own output
+                        clear_synced(video)
+                        FAILED.pop(video, None)
                 save_state()
-            FAILED.clear()  # new subtitle sources can make earlier failures syncable
             self.send(body={"ok": True})
         elif path == "/play":
             v = allowed(body.get("video"))
@@ -735,7 +797,7 @@ class Server(BaseHTTPRequestHandler):
             except (LookupError, OSError) as e:
                 error = str(e)
                 SESSION = make_session(str(v), None)
-            DELAY, TIME = 0.0, (0.0, time.time())
+            DELAY, TIME = float(STATE.get("offsets", {}).get(str(v.parent), 0.0)), (0.0, time.time())
             with STATE_LOCK:
                 STATE["last"] = str(v)
                 save_state()
@@ -744,12 +806,18 @@ class Server(BaseHTTPRequestHandler):
             i = eps.index(v) if v in eps else -1
             pos, dur = progress(v)
             self.send(body={
-                "id": SESSION.id, "lines": SESSION.lines, "error": error, "name": v.stem,
+                "id": SESSION.id, "lines": SESSION.lines, "error": error, "name": v.stem, "offset": DELAY,
                 "series": v.parent.name, "dir": str(v.parent),
                 "pos": pos if dur and pos / dur < WATCHED else 0,
                 "prev": str(eps[i - 1]) if i > 0 else None,
                 "next": str(eps[i + 1]) if 0 <= i < len(eps) - 1 else None,
             })
+        elif path == "/offset":
+            if v := allowed(body.get("video")):
+                with STATE_LOCK:
+                    STATE.setdefault("offsets", {})[str(v.parent)] = round(float(body["delay"]), 2)
+                    save_state()
+            self.send(body={})
         elif path == "/update":
             TIME = float(body.get("time", 0)), time.time()
             DELAY = float(body.get("delay", 0))

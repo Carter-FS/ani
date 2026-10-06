@@ -152,7 +152,7 @@
           <button class="pill" id="prev-ep">&lsaquo; Prev</button>
           <span class="title" id="ep-title"></span>
           <button class="pill" id="hover-pause" aria-pressed="true" title="Pause while the mouse is over the subtitle (H)">Hover pause</button>
-          <span class="pill" id="offset" title="Subtitle offset ([ and ])">0.0s</span>
+          <span class="pill" id="offset" title="Subtitle offset ([ and ]); remembered per series">0.0s</span>
           <button class="pill" id="next-ep">Next &rsaquo;</button>
         </div>
       </div>
@@ -196,7 +196,7 @@ const esc = (s) => s.replace(/<[^>]*>/g, '').replace(/&/g, '&amp;').replace(/</g
 const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
 // Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence
 // extraction returns the full subtitle line, which the server matches against.
-const lineHTML = (parts) => parts.map((s) => esc(s).replace(DELIM, `<span style="--s: '\\$1'"></span>`)).join('<span class="nl"></span>');
+const lineHTML = (parts) => parts.map((s) => esc(s).replace(DELIM, (c) => `<span style="--s: '\\${c === '"' ? '&quot;' : c}'"></span>`)).join('<span class="nl"></span>');
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 /* theme */
@@ -357,8 +357,8 @@ async function play(path) {
     note(d.error || 'Could not open that video.', 'err');
     return;
   }
-  if (d.error && !d.lines?.length) toast(d.error);
-  Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: 0, shown: -1, active: '' });
+  if (d.error && !d.lines?.length) note(d.error, 'err');
+  Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: d.offset || 0, shown: -1, active: '' });
   P.starts = P.lines.map((l) => l[1]);
   document.title = `${d.name} - ani`;
   $('#crumb').innerHTML = `<a href="/?dir=${encodeURIComponent(d.dir)}" style="color:inherit">${esc(d.series)}</a>`;
@@ -366,7 +366,7 @@ async function play(path) {
   $('#count').textContent = `${P.lines.length} lines`;
   $('#prev-ep').disabled = !d.prev;
   $('#next-ep').disabled = !d.next;
-  $('#offset').textContent = '0.0s';
+  showOffset();
 
   const frag = document.createDocumentFragment();
   P.els = P.lines.map(([parts, start, label], i) => {
@@ -374,7 +374,7 @@ async function play(path) {
     el.className = 'ln';
     el.hidden = true;
     el.innerHTML = `<time>${label}</time><div class="jp">${lineHTML(parts)}</div>`;
-    el.onclick = () => { video.currentTime = start / 1000 + P.delay; };
+    el.onclick = () => { video.currentTime = start / 1000 + P.delay + 0.001; };
     frag.appendChild(el);
     return el;
   });
@@ -415,13 +415,18 @@ function seekLine(delta) {
   const ms = (video.currentTime - P.delay) * 1000;
   let i = bisect(P.starts, ms) - 1;
   if (delta < 0 && i >= 0 && ms - P.starts[i] < 800) i--; // near a line's start: go to the one before
-  i = Math.max(0, Math.min(P.lines.length - 1, delta === 0 ? Math.max(i, 0) : i + (delta > 0 ? 1 : 0)));
-  if (P.lines[i]) video.currentTime = P.lines[i][1] / 1000 + P.delay;
+  if (delta > 0) i++;
+  if (i >= P.lines.length) return;  // already on the last line
+  i = Math.max(0, i);
+  if (P.lines[i]) video.currentTime = P.lines[i][1] / 1000 + P.delay + 0.001;
 }
+
+const showOffset = () => { $('#offset').textContent = `${P.delay > 0 ? '+' : ''}${P.delay.toFixed(1)}s`; };
 
 function setDelay(d) {
   P.delay = Math.round(d * 10) / 10;
-  $('#offset').textContent = `${P.delay > 0 ? '+' : ''}${P.delay.toFixed(1)}s`;
+  showOffset();
+  api('/offset', { video: P.path, delay: P.delay }).catch(() => {});  // remembered per series
   P.active = null;
   toast(`Subtitle offset ${$('#offset').textContent}`);
   P.shown = -2;  // force the transcript to re-reveal at the new offset

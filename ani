@@ -88,11 +88,17 @@ def main():
     if a.target is None:
         return open_url("/?continue")
 
-    target = a.target.expanduser().resolve()
-    if not target.exists():
-        sys.exit(f"ani: not found: {target}")
+    raw = a.target.expanduser()
+    if not raw.exists():
+        sys.exit(f"ani: not found: {raw}")
+    is_video = raw.is_file()
+    # keep a symlinked episode in the folder it was linked into, like the server does
+    target = raw.parent.resolve() / raw.name if is_video else raw.resolve()
     subs = a.subs.expanduser().resolve() if a.subs else None
-    is_video = target.is_file()
+    if subs and not subs.exists():
+        sys.exit(f"ani: subtitles not found: {subs}")
+    if subs and subs.is_file() and not is_video:
+        sys.exit("ani: a single subtitle file needs a video; give a subtitle folder for a series")
     reg = {"dir": str(target.parent if is_video else target)}
     if subs and subs.is_dir():
         reg["subs"] = str(subs)

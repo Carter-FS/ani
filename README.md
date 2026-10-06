@@ -55,7 +55,7 @@ ani --resync <video>       # sync the subtitle again
 ani --stop                 # stop the background server
 ```
 
-With a subtitle folder, each video is matched to a subtitle by episode number (`S01E03`, `- 03`, `第3話`). Synced subtitles are saved next to each video as `<video>.ani.srt`; files you provide are never modified.
+With a subtitle folder, each video is matched to a subtitle by episode number (`S01E03`, `- 03`, `第3話`). Synced subtitles are saved next to each video as `<video>.ani.srt` (or `.ani.ass`); files you provide are never modified. Files still being written are synced once unchanged for a minute.
 
 To add episodes from the browser, drop files onto a series page or use **Add episodes**. Browsers do not expose file paths, so the server finds each file by name and size in the `ANI_SEARCH` folders and moves it into the series. Subtitles go to the series' subtitle folder.
 
@@ -66,7 +66,7 @@ To add episodes from the browser, drop files onto a series page or use **Add epi
 | Space / K | Play or pause |
 | Left / Right | Previous or next line |
 | R | Replay the current line |
-| `[` / `]` | Subtitle offset -/+ 0.1s |
+| `[` / `]` | Subtitle offset -/+ 0.1s, remembered per series |
 | F | Fullscreen |
 | N / P | Next or previous episode |
 | H | Toggle hover pause |
