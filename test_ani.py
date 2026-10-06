@@ -74,12 +74,27 @@ cases = {
     "Show_Special_01.mkv": None,
     "Show_NCOP_01.mkv": None,
     "Show_05_Special.mkv": None,
+    "[VCB-Studio] Kaguya-sama 3 - Ultra Romantic [05][Ma10p_1080p][x265_flac].mkv": 5,
+    "[Group] Show 2 - Subtitle [05][1080p].mkv": 5,
+    "[Group] Bungou Stray Dogs 4 - [05] [1080p].mkv": 5,
+    "[Group] Mob Psycho 100 III - [05][1080p].mkv": 5,
+    "[Group] Show (ONA) - 05.mkv": 5,
+    "Show 05 (ONA).mkv": 5,
+    "Show 1x05.mkv": 5,
+    "ショー 05「タイトル」.srt": 5,
     "Show 05 Special.mkv": None,
     "Show - 05 (NCOP).mkv": None,
     "no number here.mkv": None,
 }
 for name, want in cases.items():
     assert s.episode(name) == want, (name, s.episode(name), want)
+
+# seasons sharing a folder sort and match by season too
+seasons = tmpdir()
+for n in ("Show.S02E01.mkv", "Show.S01E02.mkv", "Show.S01E01.mkv", "Show.S01E01.srt", "Show.S02E01.srt"):
+    (seasons / n).write_bytes(b"x")
+assert [v.name for v in s.episodes(seasons)] == ["Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S02E01.mkv"]
+assert s.find_sub(seasons / "Show.S02E01.mkv", seasons).name == "Show.S02E01.srt"
 
 # --- SRT parsing is lenient and sorted
 srt = ("1\n00:00:05,000 --> 00:00:06,000\n<i>二番</i>\n\n\n"   # extra blank line

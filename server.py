@@ -159,6 +159,7 @@ def normalize_str(s):
 
 EP_PATTERNS = [
     r"S\d+\s*E(\d{1,4})",
+    r"(?<![\dx])\d{1,2}x(\d{2,3})(?!\d)",  # "Show 1x05"
     r"第(\d+)話",
     r"(?:^|[\s._\-\[(])E[Pp]?\.?\s*(\d{1,4})(?=$|[\s._\-\])v])",
 ]
@@ -170,7 +171,7 @@ BRACKET_EP = re.compile(r"\[(\d{1,4}(?:\.5)?)(?:v\d)?(?:\s*END)?\]", re.I)  # "[
 # A file is a special (OVA, creditless OP/ED, ...) when the keyword is its own tag, sits right
 # before the number, or ends the name right after it. In an episode title it doesn't count.
 # Boundaries are spelled out because \b doesn't split on "_" ("Show_OVA_01").
-KEYWORD = r"(?<![A-Za-z0-9])(?:OVA|OAD|ONA|SP|Specials?|NCOP\d*|NCED\d*|PV|Preview|Menu|Movie)(?![A-Za-z])"
+KEYWORD = r"(?<![A-Za-z0-9])(?:OVA|OAD|SP|Specials?|NCOP\d*|NCED\d*|PV|Preview|Menu|Movie)(?![A-Za-z])"
 SPECIAL_TAG = re.compile(rf"[\[(]{KEYWORD}[\])]", re.I)             # "[Show][OVA][01]", "(NCOP)"
 SPECIAL_BEFORE = re.compile(rf"{KEYWORD}[\s._\-]*\d", re.I)          # "OVA 01", "Show_OVA_01", "NCOP1"
 SPECIAL_AFTER = re.compile(rf"[\s._\-]*{KEYWORD}[\s._\-]*$", re.I)   # "Show 2 - OVA", "Show - 01 NCOP"
@@ -191,9 +192,13 @@ def episode(name):
             return int(m.group(1))
     if SPECIAL_TAG.search(stem):
         return None  # specials must not collide with regular episode numbers
-    bare = NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem)).strip()
+    bare = re.sub(r"\s+", " ", NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem))).strip()
     if SPECIAL_BEFORE.search(bare):
         return None
+    # a bare bracketed number is explicit: "[Group] Kaguya-sama 3 - Ultra Romantic [05][1080p]"
+    if (b := BRACKET_EP.search(stem)) and not re.fullmatch(r"(19|20)\d\d", b.group(1)):
+        tail = " " + re.sub(r"\s+", " ", NOISE.sub(" ", stem[b.end():])).strip()
+        return None if SPECIAL_AFTER.match(tail) else _num(b.group(1))
     # first " - N": later ones are usually episode titles. Ambiguous by nature: "Show 05 - 100 Days"
     # reads as 100, because "Mob Psycho 100 - 04" (the common convention) has the same shape.
     if m := DASH_EP.search(bare):
@@ -202,12 +207,17 @@ def episode(name):
     # e.g. "Show_03", "Show.05", "Mob Psycho 100 03", "Show 05 - Movie Night"
     bare = re.sub(r"(\d)\.5(?!\d)", r"\1·5", bare)
     head = len(bare.split(" - ")[0])
-    nums = [(m.group(1), t.end()) for t in re.finditer(r"[^\s._\-#＃]+", bare)
+    nums = [(m.group(1), t.end()) for t in re.finditer(r"[^\s._\-#＃「」『』]+", bare)
             if (m := TOKEN.match(t.group())) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]
     nums = [n for n in nums if n[1] <= head] or nums
     if not nums or SPECIAL_AFTER.match(bare, nums[-1][1]):
         return None
     return _num(nums[-1][0])
+
+
+def season(name):
+    m = re.search(r"S(\d+)\s*E\d|(?<![\dx])(\d{1,2})x\d{2,3}(?!\d)", Path(name).stem, re.I)
+    return int(m.group(1) or m.group(2)) if m else None
 
 
 def visible(f):
@@ -249,16 +259,22 @@ def find_sub(video, where):
     ep = episode(video.name)
     if ep is None:
         raise LookupError(f"no episode number in {video.name}")
-    hits = sub_index(where).get(ep, [])
+    vs = season(video.name)
+    hits = [f for f in sub_index(where).get(ep, []) if vs is None or season(f.name) in (None, vs)]
     if len(hits) != 1:
         raise LookupError(f"{len(hits)} subtitles for episode {ep} in {where}")
     return hits[0]
 
 
+def synced_name(video, sub):
+    return video.with_name(video.stem + ".ani" + sub.suffix.lower())
+
+
 def sync(video, sub):
-    """Align `sub` to the video's audio with alass; returns the synced file or None."""
+    """Align `sub` to the video's audio with alass. Returns a hidden .part file beside the
+    video for the caller to publish, or None on failure."""
     print(f"syncing {sub.name}", flush=True)
-    out = video.with_name(video.stem + ".ani" + sub.suffix.lower())
+    out = synced_name(video, sub)
     # alass trips on [] in paths, so run it on clean symlinks; it also refuses format
     # conversion, so the output keeps the subtitle's own extension.
     # fps guessing off: it misfires on releases with equal frame rates (e.g. 25/23.976).
@@ -276,8 +292,7 @@ def sync(video, sub):
                 return None
             part = out.with_name(f".{out.name}.part")
             shutil.copyfile(o, part)
-            part.replace(out)  # atomic, so /play never reads a half-written file
-            return out
+            return part
     except OSError as e:
         print(f"sync failed on {video.name}: {e}", flush=True)
         return None
@@ -317,7 +332,7 @@ def episodes(folder):
         files = [f for f in Path(folder).iterdir() if visible(f) and f.suffix.lower() in VIDEO_EXTS]
     except OSError:
         return []
-    return sorted(files, key=lambda f: (episode(f.name) is None, episode(f.name) or 0, f.name))
+    return sorted(files, key=lambda f: (episode(f.name) is None, season(f.name) or 0, episode(f.name) or 0, f.name))
 
 
 def allowed(path):
@@ -378,8 +393,8 @@ def ensure_synced(video, retry=True):
         if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
             return sub
         generation = RESYNCS[video]
-        out = sync(video, sub)
-        if not out:
+        part = sync(video, sub)
+        if not part:
             FAILED[video] = fail_key(video, sub)
             return sub
         try:
@@ -387,8 +402,10 @@ def ensure_synced(video, retry=True):
         except (LookupError, OSError):
             current = False
         if current:
+            out = synced_name(video, sub)
+            part.replace(out)  # atomic publish, so /play never reads a half-written file
             return out
-        clear_synced(video)  # subtitle source changed or a resync was requested while alass ran
+        part.unlink(missing_ok=True)  # subtitle source changed or a resync was requested meanwhile
     return ensure_synced(video, retry=False) if retry else source_sub(video)
 
 
