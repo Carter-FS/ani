@@ -192,6 +192,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('ani.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('ani.' + k, JSON.stringify(v)); } catch {} },
 };
+const escName = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const esc = (s) => s.replace(/<[^>]*>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
@@ -237,9 +238,9 @@ async function showLibrary(dir) {
   $('#crumb').textContent = data.name || '';
   LIB = data.dir || null;
   if (!data.dir) {
-    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${escAttr(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
+    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${escAttr(s)}">${escName(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
     lib.innerHTML = data.missing
-      ? `<h1>Library</h1><p class="empty">Folder not found: <code>${esc(data.missing)}</code>. It may have been moved or unmounted.</p>${pick}`
+      ? `<h1>Library</h1><p class="empty">Folder not found: <code>${escName(data.missing)}</code>. It may have been moved or unmounted.</p>${pick}`
       : `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>${pick}`;
     $('#series')?.addEventListener('change', (ev) => location.href = '/?dir=' + encodeURIComponent(ev.target.value));
     return;
@@ -247,9 +248,9 @@ async function showLibrary(dir) {
   const watched = data.episodes.filter((e) => e.watched).length;
   const others = data.series.filter((s) => s !== data.dir);
   lib.innerHTML = `
-    <h1>${esc(data.name)}</h1>
+    <h1>${escName(data.name)}</h1>
     <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
-      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
+      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${escName(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
     <div class="actions">
       ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
       <button class="ghost" id="add" title="Or drop files anywhere on this page">+ Add episodes</button>
@@ -264,7 +265,7 @@ async function showLibrary(dir) {
         </div>
         <div class="meta">
           <div class="ep"><span class="sync ${e.synced ? 'on' : ''}" title="${e.synced ? 'Subtitles synced' : 'Not synced yet'}"></span>Episode ${e.ep ?? '?'}</div>
-          <div class="file">${esc(e.name)}</div>
+          <div class="file">${escName(e.name)}</div>
         </div>
       </a>`).join('')}</div>`;
   $('#continue')?.addEventListener('click', () => location.href = '/?v=' + encodeURIComponent(data.continue));
@@ -362,7 +363,7 @@ async function play(path) {
   Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: d.offset || 0, shown: -1, active: '' });
   P.starts = P.lines.map((l) => l[1]);
   document.title = `${d.name} - ani`;
-  $('#crumb').innerHTML = `<a href="/?dir=${encodeURIComponent(d.dir)}" style="color:inherit">${esc(d.series)}</a>`;
+  $('#crumb').innerHTML = `<a href="/?dir=${encodeURIComponent(d.dir)}" style="color:inherit">${escName(d.series)}</a>`;
   $('#ep-title').textContent = d.name;
   $('#count').textContent = `${P.lines.length} lines`;
   $('#prev-ep').disabled = !d.prev;

@@ -167,11 +167,13 @@ NOISE = re.compile(
     r"|\b(?:AAC|E?-?AC-?3|DDP?|FLAC|Opus|DTS(?:-HD)?|TrueHD|LPCM)\s*\d\.\d\b"  # audio channels
     r"|\b[HhXx]\.?26[45]\b|\b\d+\s*bits?\b|\b\d{3,4}[pPiI]\b|\b[257]\.[01]\b", re.I)
 BRACKET_EP = re.compile(r"\[(\d{1,4}(?:\.5)?)(?:v\d)?(?:\s*END)?\]", re.I)  # "[Show][05][1080p]"
-KEYWORD = r"(?:OVA|OAD|ONA|SP|Specials?|NCOP\d*|NCED\d*|PV|Preview|Menu|Movie)"
-SPECIAL = re.compile(rf"\b{KEYWORD}\s*[-_.]?\s*\d", re.I)        # "OVA 01", "NCOP1"
-SPECIAL_TAG = re.compile(rf"\[{KEYWORD}\]", re.I)                  # "[Show][OVA][01]"
-SPECIAL_AFTER = re.compile(rf"[\s._]*{KEYWORD}\b", re.I)            # "Show - 01 NCOP", not "- 01 - Title"
-SPECIAL_WORD = re.compile(rf"\b{KEYWORD}\b", re.I)
+# A file is a special (OVA, creditless OP/ED, ...) when the keyword is its own tag, sits right
+# before the number, or ends the name right after it. In an episode title it doesn't count.
+# Boundaries are spelled out because \b doesn't split on "_" ("Show_OVA_01").
+KEYWORD = r"(?<![A-Za-z0-9])(?:OVA|OAD|ONA|SP|Specials?|NCOP\d*|NCED\d*|PV|Preview|Menu|Movie)(?![A-Za-z])"
+SPECIAL_TAG = re.compile(rf"[\[(]{KEYWORD}[\])]", re.I)             # "[Show][OVA][01]", "(NCOP)"
+SPECIAL_BEFORE = re.compile(rf"{KEYWORD}[\s._\-]*\d", re.I)          # "OVA 01", "Show_OVA_01", "NCOP1"
+SPECIAL_AFTER = re.compile(rf"[\s._\-]*{KEYWORD}[\s._\-]*$", re.I)   # "Show 2 - OVA", "Show - 01 NCOP"
 DASH_EP = re.compile(r"\s-\s(\d{1,4}(?:\.5)?)(?:v\d)?(?=$|[\s._-])")
 TOKEN = re.compile(r"^(\d{1,4}(?:·5)?)(?:v\d)?$")
 
@@ -188,18 +190,23 @@ def episode(name):
         if m := re.search(pat, stem, re.IGNORECASE):
             return int(m.group(1))
     if SPECIAL_TAG.search(stem):
-        return None  # OVAs/creditless etc. must not collide with regular episode numbers
-    bare = NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem))
-    if SPECIAL.search(bare):
+        return None  # specials must not collide with regular episode numbers
+    bare = NOISE.sub(" ", BRACKET_EP.sub(r" \1 ", stem)).strip()
+    if SPECIAL_BEFORE.search(bare):
         return None
-    if m := DASH_EP.search(bare):  # first " - N": later ones are usually episode titles
+    # first " - N": later ones are usually episode titles. Ambiguous by nature: "Show 05 - 100 Days"
+    # reads as 100, because "Mob Psycho 100 - 04" (the common convention) has the same shape.
+    if m := DASH_EP.search(bare):
         return None if SPECIAL_AFTER.match(bare, m.end()) else _num(m.group(1))
-    # last standalone number that isn't a year, e.g. "Show_03", "Show.05", "Mob Psycho 100 03"
+    # Otherwise the last standalone non-year number, looking only before any " - Title" part,
+    # e.g. "Show_03", "Show.05", "Mob Psycho 100 03", "Show 05 - Movie Night"
     bare = re.sub(r"(\d)\.5(?!\d)", r"\1·5", bare)
+    head = len(bare.split(" - ")[0])
     nums = [(m.group(1), t.end()) for t in re.finditer(r"[^\s._\-#＃]+", bare)
-            if (m := TOKEN.match(t.group())) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]  # skip years
-    if not nums or SPECIAL_WORD.search(bare, nums[-1][1]):
-        return None  # "Show 2 - OVA": the only number belongs to the series name
+            if (m := TOKEN.match(t.group())) and not re.fullmatch(r"(19|20)\d\d", m.group(1))]
+    nums = [n for n in nums if n[1] <= head] or nums
+    if not nums or SPECIAL_AFTER.match(bare, nums[-1][1]):
+        return None
     return _num(nums[-1][0])
 
 
@@ -326,6 +333,7 @@ def allowed(path):
 
 FAILED = {}  # video -> fail_key when its sync last failed
 SYNC_LOCKS = defaultdict(threading.Lock)
+RESYNCS = defaultdict(int)  # video -> resync requests; a sync started before one is discarded
 
 
 def signature(path):
@@ -357,7 +365,7 @@ def needs_sync(video):
         return False
 
 
-def ensure_synced(video):
+def ensure_synced(video, retry=True):
     """Synced subtitle, or the unsynced source when syncing failed or the file is still downloading."""
     if out := synced_path(video):
         return out
@@ -369,17 +377,19 @@ def ensure_synced(video):
             return out
         if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
             return sub
-        if out := sync(video, sub):
-            try:
-                same = source_sub(video) == sub
-            except (LookupError, OSError):
-                same = False
-            if same:
-                return out
-            clear_synced(video)  # source changed while alass ran; background sync redoes it
-            return source_sub(video)  # raises if it is now missing or ambiguous
-        FAILED[video] = fail_key(video, sub)
-    return sub
+        generation = RESYNCS[video]
+        out = sync(video, sub)
+        if not out:
+            FAILED[video] = fail_key(video, sub)
+            return sub
+        try:
+            current = source_sub(video) == sub and RESYNCS[video] == generation
+        except (LookupError, OSError):
+            current = False
+        if current:
+            return out
+        clear_synced(video)  # subtitle source changed or a resync was requested while alass ran
+    return ensure_synced(video, retry=False) if retry else source_sub(video)
 
 
 def sync_season(folder):
@@ -817,8 +827,8 @@ class Server(BaseHTTPRequestHandler):
                         STATE["overrides"][str(video)] = sub_file
                         clear_synced(video)
                     if body.get("resync"):
-                        with SYNC_LOCKS[video]:  # let a running sync finish, then discard it
-                            clear_synced(video)
+                        RESYNCS[video] += 1  # a sync already running for it gets discarded
+                        clear_synced(video)
                         FAILED.pop(video, None)
                 save_state()
             self.send(body={"ok": True})

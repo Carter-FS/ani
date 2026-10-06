@@ -67,6 +67,15 @@ cases = {
     "Show - 01 NCOP.mkv": None,
     "[Nekomoe][Show][OVA][01][1080p].mkv": None,
     "[Show][SP][02][1080p].mkv": None,
+    "Show 05 - Movie Night.mkv": 5,
+    "Show 05 The Menu.mkv": 5,
+    "[Group] Show - 05 Special Delivery [1080p].mkv": 5,
+    "[Coalgirls]_Show_OVA_01_(1280x720).mkv": None,
+    "Show_Special_01.mkv": None,
+    "Show_NCOP_01.mkv": None,
+    "Show_05_Special.mkv": None,
+    "Show 05 Special.mkv": None,
+    "Show - 05 (NCOP).mkv": None,
     "no number here.mkv": None,
 }
 for name, want in cases.items():
@@ -200,8 +209,25 @@ def switching_sync(video, sub):
 
 
 s.sync = switching_sync
-assert s.ensure_synced(ass_show / "Show - 03.mkv") == alt / "Show - 03.srt"
-assert s.synced_path(ass_show / "Show - 03.mkv") is None
+out = s.ensure_synced(ass_show / "Show - 03.mkv")  # redone at once against the new source
+assert out == ass_show / "Show - 03.ani.srt" and "x" in out.read_text(), out
+s.sync = real_sync
+s.clear_synced(ass_show / "Show - 03.mkv")
+
+# a resync requested while alass runs discards that run and syncs again
+runs = []
+
+
+def resync_during(video, sub):
+    runs.append(sub)
+    out = real_sync(video, sub)
+    if len(runs) == 1:
+        s.RESYNCS[video] += 1
+    return out
+
+
+s.sync = resync_during
+assert s.ensure_synced(ass_show / "Show - 03.mkv") and len(runs) == 2
 s.sync = real_sync
 s.STATE["series"][str(ass_show)]["subs"] = None
 s.clear_synced(ass_show / "Show - 03.mkv")
