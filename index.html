@@ -100,8 +100,8 @@
     .ln time { display: block; color: var(--muted); font-size: 0.7rem; margin-bottom: 0.15rem; }
     .ln .jp { font-family: "Shippori Mincho", serif; font-size: 1.1rem; line-height: 1.45; }
     /* punctuation drawn by CSS so Yomitan treats the whole line as one sentence */
-    .jp > span::after { content: var(--s); }
-    .jp > .nl::after { content: "\a"; white-space: pre; }
+    .jp span::after { content: var(--s); }
+    .jp .nl::after { content: "\a"; white-space: pre; }
 
     .keys { color: var(--muted); font-size: 0.72rem; padding: 0.6rem 1rem; border-top: 1px solid var(--line); line-height: 1.7; }
     kbd { font-family: inherit; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 0.3rem; }
@@ -236,7 +236,11 @@ async function showLibrary(dir) {
   $('#crumb').textContent = data.name || '';
   LIB = data.dir || null;
   if (!data.dir) {
-    lib.innerHTML = `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>`;
+    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${esc(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
+    lib.innerHTML = data.missing
+      ? `<h1>Library</h1><p class="empty">Folder not found: <code>${esc(data.missing)}</code>. It may have been moved or unmounted.</p>${pick}`
+      : `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>${pick}`;
+    $('#series')?.addEventListener('change', (ev) => location.href = '/?dir=' + encodeURIComponent(ev.target.value));
     return;
   }
   const watched = data.episodes.filter((e) => e.watched).length;
@@ -345,7 +349,14 @@ async function play(path) {
   $('#library').hidden = true;
   $('#player').hidden = false;
   $('#ep-title').textContent = 'Loading…';
-  const d = await api('/play', { video: path });
+  const d = await api('/play', { video: path }).catch(() => ({ error: 'Server not running. Start it with ani.' }));
+  if (!d.id) {  // stale or foreign link: back to the library
+    P.path = null;
+    history.replaceState(null, '', '/');
+    await showLibrary();
+    note(d.error || 'Could not open that video.', 'err');
+    return;
+  }
   if (d.error && !d.lines?.length) toast(d.error);
   Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: 0, shown: -1, active: '' });
   P.starts = P.lines.map((l) => l[1]);
@@ -384,7 +395,8 @@ function render() {
   const key = active.join(',');
   if (key !== P.active) {
     P.active = key;
-    $('#overlay').innerHTML = active.map((i) => lineHTML(P.lines[i][0])).join('<span class="nl"></span>');
+    const texts = [...new Set(active.map((i) => lineHTML(P.lines[i][0])))];
+    $('#overlay').innerHTML = texts.map((t) => `<div>${t}</div>`).join('');
     P.els.forEach((el) => el.classList.remove('now'));
     active.forEach((i) => P.els[i].classList.add('now'));
   }
@@ -412,6 +424,8 @@ function setDelay(d) {
   $('#offset').textContent = `${P.delay > 0 ? '+' : ''}${P.delay.toFixed(1)}s`;
   P.active = null;
   toast(`Subtitle offset ${$('#offset').textContent}`);
+  P.shown = -2;  // force the transcript to re-reveal at the new offset
+  render();
 }
 
 function setHoverPause(on) {
@@ -442,10 +456,11 @@ $('#prev-ep').onclick = () => go(P.prev);
 $('#next-ep').onclick = () => go(P.next);
 $('#hover-pause').onclick = () => setHoverPause(!hoverPause);
 setHoverPause(hoverPause);
-addEventListener('pagehide', saveProgress);
+// last chance to fill a card mined just before leaving this episode
+addEventListener('pagehide', () => { saveProgress(); if (P.path) navigator.sendBeacon('/check', '{}'); });
 
 document.addEventListener('keydown', (e) => {
-  if ($('#player').hidden || e.target.closest('input, textarea, select, dialog') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if ($('#player').hidden || e.target.closest?.('input, textarea, select, dialog') || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const actions = {
     ' ': () => video.paused ? video.play() : video.pause(), k: () => video.paused ? video.play() : video.pause(),

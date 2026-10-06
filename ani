@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -32,9 +33,8 @@ def call(path, body=None):
 
 def running():
     try:
-        call("/options")
-        return True
-    except OSError:
+        return isinstance(call("/options"), dict)
+    except (OSError, ValueError):  # ValueError: something else is answering on the port
         return False
 
 
@@ -43,8 +43,8 @@ def start_server():
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log = open(STATE_DIR / "server.log", "a")
-    subprocess.Popen([sys.executable, str(HERE / "server.py")], stdout=log, stderr=log,
-                         start_new_session=True)
+    subprocess.Popen([sys.executable, str(HERE / "server.py")], stdin=subprocess.DEVNULL,
+                     stdout=log, stderr=log, start_new_session=True)
     for _ in range(50):
         if running():
             return
@@ -81,6 +81,8 @@ def main():
 
     if a.stop:
         return stop_server()
+    if a.resync and not (a.target and a.target.expanduser().is_file()):
+        sys.exit("ani: --resync needs a video file")
 
     start_server()
     if a.target is None:
@@ -98,7 +100,10 @@ def main():
         reg.update(video=str(target), resync=a.resync)
         if subs and subs.is_file():
             reg["sub_file"] = str(subs)
-    call("/register", reg)
+    try:
+        call("/register", reg)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"ani: {json.load(e).get('error', e)}")
     open_url(("/?v=" if is_video else "/?dir=") + quote(str(target)))
 
 
