@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -39,8 +40,18 @@ WATCHED = 0.9
 SETTLE = 60  # seconds a file must be unmodified before background sync (still downloading otherwise)
 
 
-def run(cmd):
+# Background work (season sync, thumbnails) runs at low CPU and disk priority so playback never hitches.
+if sys.platform == "darwin" and shutil.which("taskpolicy"):
+    LOW_PRIORITY = ["taskpolicy", "-b"]
+else:
+    LOW_PRIORITY = (["nice", "-n", "10"] if shutil.which("nice") else []) + \
+                   (["ionice", "-c", "3"] if shutil.which("ionice") else [])
+
+
+def run(cmd, low=False):
     """Run a tool without a terminal: no stdin (ffmpeg would grab the tty), output captured."""
+    if low:
+        cmd = LOW_PRIORITY + cmd
     try:
         return subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                               errors="replace")
@@ -215,9 +226,13 @@ def episode(name):
     return _num(nums[-1][0])
 
 
+SEASON = re.compile(r"S(\d+)\s*E\d|(?<![\dx])(\d{1,2})x\d{2,3}(?!\d)"
+                    r"|(?<![A-Za-z0-9])S(\d{1,2})\s*-\s*\d|Season\s*(\d{1,2})", re.I)
+
+
 def season(name):
-    m = re.search(r"S(\d+)\s*E\d|(?<![\dx])(\d{1,2})x\d{2,3}(?!\d)", Path(name).stem, re.I)
-    return int(m.group(1) or m.group(2)) if m else None
+    m = SEASON.search(Path(name).stem)
+    return int(next(g for g in m.groups() if g)) if m else None
 
 
 def visible(f):
@@ -252,6 +267,9 @@ def sub_index(where):
     return index
 
 
+JAPANESE = re.compile(r"(?:^|[._\-\s\[(])(?:ja|jp|jpn|japanese|日本語)(?=$|[._\-\s\])\[])", re.I)
+
+
 def find_sub(video, where):
     """Subtitle file for `video` from a file or a folder (matched by episode number)."""
     if where.is_file():
@@ -259,18 +277,34 @@ def find_sub(video, where):
     ep = episode(video.name)
     if ep is None:
         raise LookupError(f"no episode number in {video.name}")
+    hits = sub_index(where).get(ep, [])
     vs = season(video.name)
-    hits = [f for f in sub_index(where).get(ep, []) if vs is None or season(f.name) in (None, vs)]
+    for keep in (lambda f: vs is None or season(f.name) in (None, vs),   # same season
+                 lambda f: JAPANESE.search(f.stem)):                     # "Show - 05.ja.srt" over ".en"
+        if len(hits) > 1:
+            hits = [f for f in hits if keep(f)] or hits
     if len(hits) != 1:
         raise LookupError(f"{len(hits)} subtitles for episode {ep} in {where}")
     return hits[0]
+
+
+def read_sub(path):
+    """Subtitle text from UTF-8, UTF-16 or Shift-JIS (common for Japanese) files."""
+    raw = Path(path).read_bytes()
+    encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp932")
+    for enc in encodings:
+        try:
+            return raw.decode(enc).replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def synced_name(video, sub):
     return video.with_name(video.stem + ".ani" + sub.suffix.lower())
 
 
-def sync(video, sub):
+def sync(video, sub, background=False):
     """Align `sub` to the video's audio with alass. Returns a hidden .part file beside the
     video for the caller to publish, or None on failure."""
     print(f"syncing {sub.name}", flush=True)
@@ -283,8 +317,8 @@ def sync(video, sub):
             v, s, o = (Path(tmp, "v" + video.suffix), Path(tmp, "s" + sub.suffix.lower()),
                        Path(tmp, "o" + sub.suffix.lower()))
             v.symlink_to(video)
-            s.symlink_to(sub)
-            r = run([ALASS, "--disable-fps-guessing", str(v), str(s), str(o)])
+            s.write_text(read_sub(sub), encoding="utf-8")  # alass only decodes UTF-8/UTF-16
+            r = run([ALASS, "--disable-fps-guessing", str(v), str(s), str(o)], low=background)
             if r.returncode != 0 or not o.exists():
                 msg = f"{r.stderr}\n{r.stdout}"
                 why = [ln.strip() for ln in msg.splitlines() if ln.strip().startswith(("error", "caused by"))]
@@ -380,7 +414,7 @@ def needs_sync(video):
         return False
 
 
-def ensure_synced(video, retry=True):
+def ensure_synced(video, retry=True, background=False):
     """Synced subtitle, or the unsynced source when syncing failed or the file is still downloading."""
     if out := synced_path(video):
         return out
@@ -393,7 +427,7 @@ def ensure_synced(video, retry=True):
         if FAILED.get(video) == fail_key(video, sub):  # another thread just failed it
             return sub
         generation = RESYNCS[video]
-        part = sync(video, sub)
+        part = sync(video, sub, background)
         if not part:
             FAILED[video] = fail_key(video, sub)
             return sub
@@ -403,10 +437,15 @@ def ensure_synced(video, retry=True):
             current = False
         if current:
             out = synced_name(video, sub)
-            part.replace(out)  # atomic publish, so /play never reads a half-written file
-            return out
+            try:
+                part.replace(out)  # atomic publish, so /play never reads a half-written file
+                return out
+            except OSError as e:
+                print(f"couldn't save synced subtitle for {video.name}: {e}", flush=True)
+                part.unlink(missing_ok=True)
+                return sub
         part.unlink(missing_ok=True)  # subtitle source changed or a resync was requested meanwhile
-    return ensure_synced(video, retry=False) if retry else source_sub(video)
+    return ensure_synced(video, retry=False, background=background) if retry else source_sub(video)
 
 
 def sync_season(folder):
@@ -424,7 +463,7 @@ def sync_season(folder):
                 last = todo
                 for v in todo:
                     try:
-                        ensure_synced(v)
+                        ensure_synced(v, background=True)  # low priority: never hitch playback
                     except (LookupError, OSError):
                         pass
         finally:
@@ -509,21 +548,21 @@ THUMB_SLOTS = threading.Semaphore(3)  # bound concurrent ffmpeg runs from a libr
 
 
 def thumb(video):
-    out = THUMBS / (hashlib.sha1(str(video).encode()).hexdigest() + ".jpg")
+    out = THUMBS / (hashlib.sha1(f"{video}|{signature(video)}".encode()).hexdigest() + ".jpg")
     if out.exists():
         return out
     with THUMB_SLOTS:
         if out.exists():
             return out
         THUMBS.mkdir(parents=True, exist_ok=True)
-        r = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)])
+        r = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)], low=True)
         try:
             at = float(r.stdout) * 0.3
         except ValueError:
             return None
         part = out.with_name(f".{out.stem}.{threading.get_ident()}.jpg")
         run([FFMPEG, "-nostdin", "-v", "error", "-y", "-ss", f"{at:.1f}", "-i", str(video),
-             "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(part)])
+             "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(part)], low=True)
         if part.exists():
             part.replace(out)
     return out if out.exists() else None
@@ -533,8 +572,8 @@ def thumb(video):
 
 # Everything about the episode playing, swapped as one object so a card check
 # running during an episode change never mixes lines from one with media from another.
-Session = namedtuple("Session", "id file lines normalized")
-SESSION = Session("", "", [], [])
+Session = namedtuple("Session", "id file lines normalized audio")
+SESSION = Session("", "", [], [], "0:a:0")
 DELAY = 0.0
 TIME = 0.0, time.time()
 DONE_NOTES = set()
@@ -557,23 +596,31 @@ def clock():
     return TIME[0] + min(time.time() - TIME[1], 1.0)
 
 
+def audio_stream(file):
+    """ffmpeg map for the audio the browser plays: Japanese, else the default track, else the first."""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+             "stream_tags=language:stream_disposition=default", "-of", "json", file])
+    try:
+        streams = json.loads(r.stdout).get("streams", [])
+    except ValueError:
+        streams = []
+    for i, st in enumerate(streams):
+        if st.get("tags", {}).get("language", "").lower() in ("jpn", "ja", "jp"):
+            return f"0:a:{i}"
+    for i, st in enumerate(streams):
+        if st.get("disposition", {}).get("default"):
+            return f"0:a:{i}"
+    return "0:a:0"
+
+
 def make_session(file, sub_path):
     lines = []
     if sub_path:
-        raw = Path(sub_path).read_bytes()
-        encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp932")
-        for enc in encodings:  # cp932: Shift-JIS subtitles are common for Japanese
-            try:
-                content = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        else:
-            content = raw.decode("utf-8", "replace")
-        content = content.replace("\r\n", "\n").replace("\r", "\n")
+        content = read_sub(sub_path)
         is_ass = content.lstrip().startswith("[Script Info]") or "\nDialogue:" in content
         lines = parse_ass(content) if is_ass else parse_srt(content)
-    return Session(token(), file, lines, [normalize_str("".join(ln[0])) for ln in lines])
+    return Session(token(), file, lines, [normalize_str("".join(ln[0])) for ln in lines],
+                   audio_stream(file) if file else "0:a:0")
 
 
 def invoke(action, **params):
@@ -596,11 +643,11 @@ def take_screenshot(src, start, end):
     return store_media(file, path)
 
 
-def take_audio(src, start, end):
+def take_audio(src, start, end, stream="0:a:0"):
     file = f"autocards-{token()}.mp3"
     path = STATE_DIR / file
     run([FFMPEG, "-nostdin", "-v", "error", "-ss", f"{max(start, 0):.3f}", "-t", f"{max(end - start, 0.1):.3f}",
-         "-i", src, "-map", "0:a:0", "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(path)])
+         "-i", src, "-map", stream, "-ac", "1", "-c:a", "libmp3lame", "-q:a", "4", str(path)])
     return store_media(file, path)
 
 
@@ -635,7 +682,7 @@ def update_note(s, delay, note_id, idx, expression=None, original_sentence=None)
     fields = {OPTIONS["sentence"]: sentence}
     if picture := take_screenshot(s.file, start, end):
         fields[OPTIONS["picture"]] = f'<img src="{picture}">'
-    if sound := take_audio(s.file, start, end):
+    if sound := take_audio(s.file, start, end, s.audio):
         fields[OPTIONS["audio"]] = f"[sound:{sound}]"
     invoke("updateNote", note={"id": note_id, "fields": fields})
     print(f"updated note {note_id}", flush=True)
@@ -765,7 +812,7 @@ class Server(BaseHTTPRequestHandler):
             eps = []
             for v in episodes(folder):
                 pos, dur = progress(v)
-                eps.append({"path": str(v), "ep": episode(v.name), "name": v.stem,
+                eps.append({"path": str(v), "ep": episode(v.name), "season": season(v.name), "name": v.stem,
                             "synced": bool(synced_path(v)), "pos": pos, "dur": dur,
                             "watched": is_watched(v)})
             self.send(body={"dir": folder, "name": Path(folder).name, "episodes": eps,

@@ -93,7 +93,7 @@
 
     .transcript { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
     .transcript h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; padding: 0.8rem 1rem 0.5rem; display: flex; justify-content: space-between; }
-    .lines { overflow-y: auto; flex: 1; padding: 0 0.75rem 40vh; display: flex; flex-direction: column; gap: 0.45rem; }
+    .lines { position: relative; overflow-y: auto; flex: 1; padding: 0 0.75rem 40vh; display: flex; flex-direction: column; gap: 0.45rem; }
     .ln { border: 1px solid var(--line); border-radius: 10px; padding: 0.45rem 0.65rem; cursor: pointer; }
     .ln:hover { border-color: var(--muted); }
     .ln.now { border-color: var(--accent); }
@@ -199,6 +199,7 @@ const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
 // Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence
 // extraction returns the full subtitle line, which the server matches against.
 const lineHTML = (parts) => parts.map((s) => esc(s).replace(DELIM, (c) => `<span style="--s: '\\${c === '"' ? '&quot;' : c}'"></span>`)).join('<span class="nl"></span>');
+const epLabel = (e) => `${e.season ? `S${e.season} ` : ''}Episode ${e.ep ?? '?'}`;
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 /* theme */
@@ -252,7 +253,7 @@ async function showLibrary(dir) {
     <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
       ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${escName(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
     <div class="actions">
-      ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
+      ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: ${epLabel(data.episodes.find((e) => e.path === data.continue) || {})}</button>` : ''}
       <button class="ghost" id="add" title="Or drop files anywhere on this page">+ Add episodes</button>
       ${data.syncing ? '<span class="syncing">Syncing subtitles&hellip;</span>' : ''}
     </div>
@@ -264,7 +265,7 @@ async function showLibrary(dir) {
           ${e.dur && !e.watched ? `<span class="bar" style="width:${(100 * e.pos / e.dur).toFixed(1)}%"></span>` : ''}
         </div>
         <div class="meta">
-          <div class="ep"><span class="sync ${e.synced ? 'on' : ''}" title="${e.synced ? 'Subtitles synced' : 'Not synced yet'}"></span>Episode ${e.ep ?? '?'}</div>
+          <div class="ep"><span class="sync ${e.synced ? 'on' : ''}" title="${e.synced ? 'Subtitles synced' : 'Not synced yet'}"></span>${epLabel(e)}</div>
           <div class="file">${escName(e.name)}</div>
         </div>
       </a>`).join('')}</div>`;
@@ -330,7 +331,7 @@ addEventListener('drop', (e) => {
 
 /* player */
 const video = $('#video');
-const P = { path: null, lines: [], starts: [], els: [], delay: 0, shown: -1, active: '', hoverPaused: false, next: null, prev: null, dir: null };
+const P = { path: null, lines: [], starts: [], els: [], now: [], delay: 0, shown: -1, active: '', hoverPaused: false, next: null, prev: null, dir: null };
 let hoverPause = store.get('hoverPause', true);
 
 function toast(msg) {
@@ -360,7 +361,7 @@ async function play(path) {
     return;
   }
   if (d.error && !d.lines?.length) note(d.error, 'err');
-  Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: d.offset || 0, shown: -1, active: '' });
+  Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: d.offset || 0, shown: -1, active: '', now: [] });
   P.starts = P.lines.map((l) => l[1]);
   document.title = `${d.name} - ani`;
   $('#crumb').innerHTML = `<a href="/?dir=${encodeURIComponent(d.dir)}" style="color:inherit">${escName(d.series)}</a>`;
@@ -399,17 +400,24 @@ function render() {
     P.active = key;
     const texts = [...new Set(active.map((i) => lineHTML(P.lines[i][0])))];
     $('#overlay').innerHTML = texts.map((t) => `<div>${t}</div>`).join('');
-    P.els.forEach((el) => el.classList.remove('now'));
+    P.now.forEach((i) => P.els[i]?.classList.remove('now'));
     active.forEach((i) => P.els[i].classList.add('now'));
+    P.now = active;
   }
 
   // transcript: reveal lines already played (spoiler-free), follow if at bottom
   if (n !== P.shown) {
     const box = $('#lines');
-    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || P.shown < 0;
-    P.els.forEach((el, i) => { el.hidden = i >= n; });
+    // keep following unless the user scrolled away from the newest line
+    const prev = P.shown > 0 ? P.els[P.shown - 1] : null;
+    const follow = P.shown < 0 || !prev || Math.abs(n - P.shown) > 3 ||  // a seek re-centres
+      (prev.offsetTop + prev.offsetHeight > box.scrollTop && prev.offsetTop < box.scrollTop + box.clientHeight);
+    // only touch lines whose visibility changed (all of them after a reset)
+    const [lo, hi] = P.shown < 0 ? [0, P.els.length] : [Math.min(n, P.shown), Math.max(n, P.shown)];
+    for (let i = lo; i < hi; i++) P.els[i].hidden = i >= n;
     P.shown = n;
-    if (atBottom && n) P.els[n - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // scroll only the transcript; scrollIntoView would also nudge the page and the video
+    if (follow && n) box.scrollTo({ top: P.els[n - 1].offsetTop - box.clientHeight / 2, behavior: 'smooth' });
   }
 }
 
@@ -458,6 +466,10 @@ const go = (path) => { if (path) location.href = '/?v=' + encodeURIComponent(pat
 const toggleFull = () => document.fullscreenElement ? document.exitFullscreen() : $('#stage').requestFullscreen();
 
 video.addEventListener('timeupdate', render);
+if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+  const onFrame = () => { render(); video.requestVideoFrameCallback(onFrame); };
+  video.requestVideoFrameCallback(onFrame);
+}
 video.addEventListener('seeked', render);
 video.addEventListener('play', () => { P.hoverPaused = false; $('#upnext').hidden = true; });
 video.addEventListener('pause', saveProgress);

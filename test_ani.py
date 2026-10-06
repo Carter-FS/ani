@@ -96,6 +96,15 @@ for n in ("Show.S02E01.mkv", "Show.S01E02.mkv", "Show.S01E01.mkv", "Show.S01E01.
 assert [v.name for v in s.episodes(seasons)] == ["Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S02E01.mkv"]
 assert s.find_sub(seasons / "Show.S02E01.mkv", seasons).name == "Show.S02E01.srt"
 
+# season/language only narrow ambiguous matches; "S2 - 05" carries a season
+assert s.season("[SubsPlease] Show S2 - 05 (1080p).mkv") == 2 and s.season("Show Season 3 - 01.mkv") == 3
+mixed = tmpdir()
+for n in ("Show - S02E05 - Title.mkv", "Title.S01E05.WEBRip.Netflix.ja[cc].srt",
+          "Other - 07.mkv", "Other - 07.ja.srt", "Other - 07.en.srt"):
+    (mixed / n).write_bytes(b"x")
+assert s.find_sub(mixed / "Show - S02E05 - Title.mkv", mixed).name.startswith("Title.S01E05")  # unique: kept
+assert s.find_sub(mixed / "Other - 07.mkv", mixed).name == "Other - 07.ja.srt"
+
 # --- SRT parsing is lenient and sorted
 srt = ("1\n00:00:05,000 --> 00:00:06,000\n<i>二番</i>\n\n\n"   # extra blank line
        "garbage block\n\n"                                    # no timestamp: skipped
@@ -217,8 +226,8 @@ alt = tmpdir()
 real_sync = s.sync
 
 
-def switching_sync(video, sub):
-    out = real_sync(video, sub)
+def switching_sync(video, sub, *a):
+    out = real_sync(video, sub, *a)
     s.STATE["series"][str(ass_show)]["subs"] = str(alt)  # e.g. /register mid-run
     return out
 
@@ -233,9 +242,9 @@ s.clear_synced(ass_show / "Show - 03.mkv")
 runs = []
 
 
-def resync_during(video, sub):
+def resync_during(video, sub, *a):
     runs.append(sub)
-    out = real_sync(video, sub)
+    out = real_sync(video, sub, *a)
     if len(runs) == 1:
         s.RESYNCS[video] += 1
     return out
@@ -248,8 +257,30 @@ s.STATE["series"][str(ass_show)]["subs"] = None
 s.clear_synced(ass_show / "Show - 03.mkv")
 assert s.synced_path(ass_show / "Show - 03.mkv") is None and (ass_show / "Show - 03.ass").exists()
 
+# real tools on synthetic media: Shift-JIS subtitles sync; card audio prefers the Japanese track
+import shutil as _sh, subprocess as _sp  # noqa: E402
+if _sh.which("ffmpeg") and _sh.which("alass-cli"):
+    media = tmpdir()
+    vid = media / "Clip - 01.mkv"
+    # beeps at 2-3s and 6-7s on a Japanese track, an English (default) track first
+    _sp.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=10",
+             "-f", "lavfi", "-i", "sine=f=800:d=10", "-f", "lavfi", "-i", "sine=f=500:d=10",
+             "-filter_complex", "[2:a]volume='if(between(t,2,3)+between(t,6,7),1,0)':eval=frame[jp]",
+             "-map", "0:v", "-map", "1:a", "-map", "[jp]", "-metadata:s:a:0", "language=eng",
+             "-metadata:s:a:1", "language=jpn", "-disposition:a:0", "default", "-c:v", "libx264",
+             "-c:a", "aac", "-shortest", str(vid)], check=True)
+    assert s.audio_stream(str(vid)) == "0:a:1"
+    sjis = media / "Clip - 01.srt"
+    sjis.write_bytes("1\n00:00:02,500 --> 00:00:03,500\nはい\n\n2\n00:00:06,500 --> 00:00:07,500\nいいえ\n".encode("cp932"))
+    old(vid)
+    s.ALASS = _sh.which("alass-cli")
+    s.STATE["series"][str(media)] = {"subs": None}
+    synced = s.ensure_synced(vid)
+    assert synced.name == "Clip - 01.ani.srt", synced  # synced, not the raw fallback
+    assert s.make_session(str(vid), synced).lines[0][0] == ["はい"]
+
 # --- card checks: empty sentences never match; multi-card notes filled once; failures retried
-s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"])
+s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"], "0:a:0")
 s.OPTIONS.update(deck="Mining", sentence="Sentence", expression="Word", picture="Picture", audio="Audio")
 filled, fail_once = [], [True]
 
