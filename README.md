@@ -29,8 +29,11 @@ sudo pacman -S python ffmpeg
 yay -S alass
 
 git clone <repo-url> ani
-ln -s "$PWD/ani/ani" ~/.local/bin/ani   # any directory on PATH
+cd ani
+ln -sf "$PWD/ani" ~/.local/bin/ani   # any directory on PATH
 ```
+
+If you move the clone later, run the `ln` line again from its new location.
 
 ## Anki setup
 
