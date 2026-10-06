@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""ani - watch anime in the browser with Yomitan-scannable subtitles and one-click Anki cards.
+
+  ani                         continue where you left off
+  ani <video> [subs]          play a video; subs is a subtitle file or folder
+  ani <folder> [subs]         open a series folder in the library
+  ani --stop                  stop the background server
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+import webbrowser
+from pathlib import Path
+from urllib.parse import quote
+
+HERE = Path(__file__).resolve().parent
+PORT = int(os.environ.get("ANI_PORT", "6969"))
+URL = f"http://127.0.0.1:{PORT}"
+STATE_DIR = Path(os.environ.get("ANI_STATE")
+                 or Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")) / "ani").expanduser()
+
+
+def call(path, body=None):
+    data = None if body is None else json.dumps(body).encode()
+    with urllib.request.urlopen(urllib.request.Request(URL + path, data), timeout=5) as r:
+        return json.load(r)
+
+
+def running():
+    try:
+        call("/options")
+        return True
+    except OSError:
+        return False
+
+
+def start_server():
+    if running():
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(STATE_DIR / "server.log", "a")
+    subprocess.Popen([sys.executable, str(HERE / "server.py")], stdout=log, stderr=log,
+                         start_new_session=True)
+    for _ in range(50):
+        if running():
+            return
+        time.sleep(0.1)
+    sys.exit(f"ani: server failed to start, see {STATE_DIR / 'server.log'}")
+
+
+def stop_server():
+    try:
+        call("/quit", {})
+        print("stopped")
+    except OSError:
+        print("not running")
+
+
+def open_url(path):
+    url = URL + path
+    browser = os.environ.get("ANI_BROWSER")
+    if browser and sys.platform == "darwin":
+        subprocess.run(["open", "-a", browser, url])  # macOS app name, e.g. "Zen"
+    elif browser:
+        webbrowser.get(browser).open(url)  # command name, e.g. "firefox"
+    else:
+        webbrowser.open(url)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Watch with Yomitan-scannable subtitles and auto-filled Anki cards.")
+    ap.add_argument("target", type=Path, nargs="?", help="video file or series folder")
+    ap.add_argument("subs", type=Path, nargs="?", help="subtitle file or folder")
+    ap.add_argument("--resync", action="store_true", help="re-sync this video's subtitle")
+    ap.add_argument("--stop", action="store_true", help="stop the background server")
+    a = ap.parse_args()
+
+    if a.stop:
+        return stop_server()
+
+    start_server()
+    if a.target is None:
+        return open_url("/?continue")
+
+    target = a.target.expanduser().resolve()
+    if not target.exists():
+        sys.exit(f"ani: not found: {target}")
+    subs = a.subs.expanduser().resolve() if a.subs else None
+    is_video = target.is_file()
+    reg = {"dir": str(target.parent if is_video else target)}
+    if subs and subs.is_dir():
+        reg["subs"] = str(subs)
+    if is_video:
+        reg.update(video=str(target), resync=a.resync)
+        if subs and subs.is_file():
+            reg["sub_file"] = str(subs)
+    call("/register", reg)
+    open_url(("/?v=" if is_video else "/?dir=") + quote(str(target)))
+
+
+if __name__ == "__main__":
+    main()

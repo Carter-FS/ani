@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ani</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..700&family=Shippori+Mincho:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: light-dark(#f6f5f2, #0e0e10);
+      --panel: light-dark(#ffffff, #17171a);
+      --line: light-dark(#e3e1dc, #2a2a2f);
+      --fg: light-dark(#18181b, #ededef);
+      --muted: light-dark(#6b6b72, #8d8d96);
+      --accent: light-dark(#c2410c, #fb923c);
+      --ok: oklch(0.72 0.19 149);
+      --bad: oklch(0.64 0.23 25);
+      --radius: 12px;
+      font-family: "Inter", system-ui, sans-serif;
+    }
+    :root[data-theme="light"] { color-scheme: light; }
+    :root[data-theme="dark"] { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    header { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1.25rem; border-bottom: 1px solid var(--line); }
+    header .brand { font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; text-decoration: none; color: inherit; }
+    header .crumb { color: var(--muted); font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    .icon { width: 2.1rem; height: 2.1rem; border: 0; border-radius: 9px; background: transparent; display: grid; place-items: center; }
+    .icon:hover { background: var(--line); }
+    .icon svg { width: 1.15rem; height: 1.15rem; }
+    .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--bad); }
+    .dot.on { background: var(--ok); }
+
+    main { flex: 1; min-height: 0; }
+
+    /* library */
+    #library { overflow-y: auto; height: 100%; padding: 1.5rem clamp(1rem, 4vw, 3rem) 3rem; }
+    #library h1 { margin: 0 0 0.25rem; font-size: 1.6rem; letter-spacing: -0.02em; }
+    #library .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.9rem; }
+    #library select { font: inherit; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.3rem 0.5rem; }
+    .continue { display: inline-flex; align-items: center; gap: 0.6rem; border: 0; border-radius: 999px; background: var(--accent); color: white; padding: 0.6rem 1.1rem; font-weight: 600; margin-bottom: 1.75rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.1rem; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: transform 120ms, border-color 120ms; }
+    .card:hover { transform: translateY(-2px); border-color: var(--muted); }
+    .card .thumb { aspect-ratio: 16 / 9; background: var(--line); position: relative; }
+    .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .card .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); }
+    .card .badge { position: absolute; top: 0.45rem; right: 0.45rem; background: rgb(0 0 0 / 0.65); color: white; font-size: 0.7rem; padding: 0.15rem 0.45rem; border-radius: 6px; }
+    .card .meta { padding: 0.6rem 0.75rem 0.7rem; }
+    .card .ep { font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
+    .card .file { color: var(--muted); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.15rem; }
+    .card .sync { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--line); }
+    .card .sync.on { background: var(--ok); }
+    .empty { color: var(--muted); max-width: 36rem; line-height: 1.6; }
+    .empty code { background: var(--panel); border: 1px solid var(--line); padding: 0.1rem 0.35rem; border-radius: 5px; }
+
+    /* player */
+    #player { display: grid; grid-template-columns: minmax(0, 1fr) clamp(260px, 26vw, 420px); height: 100%; }
+    .left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .stage { position: relative; flex: 1; min-height: 0; background: black; display: grid; place-items: center; }
+    .stage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .overlay { position: absolute; left: 50%; bottom: 11%; transform: translateX(-50%); max-width: 92%; text-align: center;
+      font-family: "Shippori Mincho", serif; font-weight: 700; font-size: clamp(1.2rem, 2.6vw, 2.4rem); line-height: 1.35; color: white;
+      text-shadow: 0 0 4px black, 0 0 4px black, 0 2px 8px black; padding: 0.15em 0.5em; border-radius: 0.3em; }
+    .overlay:empty { display: none; }
+    .overlay:hover { background: rgb(0 0 0 / 0.35); }
+    .stage:fullscreen .overlay { font-size: clamp(1.6rem, 3vw, 3rem); }
+    .toast { position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); background: rgb(0 0 0 / 0.75); color: white; padding: 0.4rem 0.8rem; border-radius: 8px; font-size: 0.85rem; pointer-events: none; opacity: 0; transition: opacity 200ms; }
+    .toast.show { opacity: 1; }
+    .upnext { position: absolute; right: 1.25rem; bottom: 5rem; border: 0; border-radius: 10px; background: white; color: black; padding: 0.7rem 1rem; font-weight: 600; }
+    .bar2 { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-top: 1px solid var(--line); font-size: 0.85rem; }
+    .bar2 .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+    .pill { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 0.25rem 0.7rem; font-size: 0.8rem; }
+    .pill[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    .pill:disabled { opacity: 0.4; cursor: default; }
+
+    .transcript { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+    .transcript h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; padding: 0.8rem 1rem 0.5rem; display: flex; justify-content: space-between; }
+    .lines { overflow-y: auto; flex: 1; padding: 0 0.75rem 40vh; display: flex; flex-direction: column; gap: 0.45rem; }
+    .ln { border: 1px solid var(--line); border-radius: 10px; padding: 0.45rem 0.65rem; cursor: pointer; }
+    .ln:hover { border-color: var(--muted); }
+    .ln.now { border-color: var(--accent); }
+    .ln time { display: block; color: var(--muted); font-size: 0.7rem; margin-bottom: 0.15rem; }
+    .ln .jp { font-family: "Shippori Mincho", serif; font-size: 1.1rem; line-height: 1.45; }
+    /* punctuation drawn by CSS so Yomitan treats the whole line as one sentence */
+    .jp > span::after { content: var(--s); }
+    .jp > .nl::after { content: "\a"; white-space: pre; }
+
+    .keys { color: var(--muted); font-size: 0.72rem; padding: 0.6rem 1rem; border-top: 1px solid var(--line); line-height: 1.7; }
+    kbd { font-family: inherit; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 0.3rem; }
+
+    #settings { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--fg); padding: 1.5rem; width: min(30rem, 92vw); }
+    #settings::backdrop { background: rgb(0 0 0 / 0.4); }
+    #settings h3 { margin: 0 0 1rem; }
+    #settings label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.8rem; }
+    #settings input { font: inherit; font-family: ui-monospace, monospace; background: var(--bg); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; }
+    #settings .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+    #settings .save { width: 100%; border: 0; border-radius: 10px; background: var(--accent); color: white; padding: 0.6rem; font-weight: 600; margin-top: 0.5rem; }
+
+    @media (max-width: 800px) {
+      #player { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+      .stage { aspect-ratio: 16 / 9; flex: none; }
+      .transcript { border-left: 0; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">ani</a>
+    <span class="crumb" id="crumb"></span>
+    <span class="dot" id="dot" title="Server connection"></span>
+    <button class="icon" id="theme" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>
+    </button>
+    <button class="icon" id="open-settings" title="Anki settings" aria-label="Anki settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section id="library" hidden></section>
+
+    <section id="player" hidden>
+      <div class="left">
+        <div class="stage" id="stage">
+          <video id="video" controls preload="auto"></video>
+          <div class="overlay jp" id="overlay"></div>
+          <div class="toast" id="toast"></div>
+          <button class="upnext" id="upnext" hidden>Next episode &rsaquo;</button>
+        </div>
+        <div class="bar2">
+          <button class="pill" id="prev-ep">&lsaquo; Prev</button>
+          <span class="title" id="ep-title"></span>
+          <button class="pill" id="hover-pause" aria-pressed="true" title="Pause while the mouse is over the subtitle (H)">Hover pause</button>
+          <span class="pill" id="offset" title="Subtitle offset ([ and ])">0.0s</span>
+          <button class="pill" id="next-ep">Next &rsaquo;</button>
+        </div>
+      </div>
+      <aside class="transcript">
+        <h2><span>Transcript</span><span id="count"></span></h2>
+        <div class="lines" id="lines"></div>
+        <div class="keys">
+          <kbd>Space</kbd> play &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> line &middot; <kbd>R</kbd> replay &middot; <kbd>F</kbd> fullscreen &middot;
+          <kbd>[</kbd><kbd>]</kbd> offset &middot; <kbd>N</kbd><kbd>P</kbd> episode &middot; <kbd>H</kbd> hover pause &middot; <kbd>L</kbd> library
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h3>Anki</h3>
+      <label>Deck <input name="deck" autocomplete="off" placeholder="Mining"></label>
+      <div class="row">
+        <label>Sentence field <input name="sentence" autocomplete="off"></label>
+        <label>Expression field <input name="expression" autocomplete="off"></label>
+        <label>Picture field <input name="picture" autocomplete="off"></label>
+        <label>Sentence audio field <input name="audio" autocomplete="off"></label>
+        <label>Lines before <input name="prev_lines" type="number" min="0"></label>
+        <label>Lines after <input name="next_lines" type="number" min="0"></label>
+      </div>
+      <button class="save">Save</button>
+    </form>
+  </dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const api = (path, body) => fetch(path, body === undefined ? {} : {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}).then((r) => r.json());
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('ani.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('ani.' + k, JSON.stringify(v)); } catch {} },
+};
+const esc = (s) => s.replace(/<[^>]*>/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const DELIM = /(「|」|『|』|"|'|\.|!|\?|．|。|…|︒|！|？|︙)/g;
+// Same trick as upstream Autocards: punctuation lives in CSS so Yomitan's sentence
+// extraction returns the full subtitle line, which the server matches against.
+const lineHTML = (parts) => parts.map((s) => esc(s).replace(DELIM, `<span style="--s: '\\$1'"></span>`)).join('<span class="nl"></span>');
+const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+/* theme */
+const root = document.documentElement;
+const applyTheme = (t) => { if (t) root.dataset.theme = t; else delete root.dataset.theme; };
+applyTheme(store.get('theme', null));
+$('#theme').onclick = () => {
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(dark ? 'light' : 'dark');
+  store.set('theme', root.dataset.theme);
+};
+
+/* settings */
+const form = $('#settings-form');
+$('#open-settings').onclick = async () => {
+  const opts = await api('/options');
+  for (const [k, v] of Object.entries(opts)) if (form.elements[k]) form.elements[k].value = String(v).replace(/^"|"$/g, '');
+  $('#settings').showModal();
+};
+form.onsubmit = () => {
+  const o = Object.fromEntries(new FormData(form));
+  o.prev_lines = parseInt(o.prev_lines) || 0;
+  o.next_lines = parseInt(o.next_lines) || 0;
+  api('/options', o);
+};
+
+/* library */
+async function showLibrary(dir) {
+  $('#player').hidden = true;
+  const lib = $('#library');
+  lib.hidden = false;
+  const data = await api('/api/library' + (dir ? '?dir=' + encodeURIComponent(dir) : ''));
+  document.title = data.name ? `${data.name} - ani` : 'ani';
+  $('#crumb').textContent = data.name || '';
+  if (!data.dir) {
+    lib.innerHTML = `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>`;
+    return;
+  }
+  const watched = data.episodes.filter((e) => e.watched).length;
+  const others = data.series.filter((s) => s !== data.dir);
+  lib.innerHTML = `
+    <h1>${esc(data.name)}</h1>
+    <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
+      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${esc(s)}">${esc(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
+    ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: Episode ${data.episodes.find((e) => e.path === data.continue)?.ep ?? ''}</button>` : ''}
+    <div class="grid">${data.episodes.map((e) => `
+      <a class="card" href="/?v=${encodeURIComponent(e.path)}">
+        <div class="thumb">
+          <img loading="lazy" src="/thumb?path=${encodeURIComponent(e.path)}" alt="" onerror="this.remove()">
+          ${e.watched ? '<span class="badge">Watched</span>' : ''}
+          ${e.dur && !e.watched ? `<span class="bar" style="width:${(100 * e.pos / e.dur).toFixed(1)}%"></span>` : ''}
+        </div>
+        <div class="meta">
+          <div class="ep"><span class="sync ${e.synced ? 'on' : ''}" title="${e.synced ? 'Subtitles synced' : 'Not synced yet'}"></span>Episode ${e.ep ?? '?'}</div>
+          <div class="file">${esc(e.name)}</div>
+        </div>
+      </a>`).join('')}</div>`;
+  $('#continue')?.addEventListener('click', () => location.href = '/?v=' + encodeURIComponent(data.continue));
+  $('#series')?.addEventListener('change', (ev) => location.href = '/?dir=' + encodeURIComponent(ev.target.value));
+}
+
+/* player */
+const video = $('#video');
+const P = { path: null, lines: [], starts: [], els: [], delay: 0, shown: -1, active: '', hoverPaused: false, next: null, prev: null, dir: null };
+let hoverPause = store.get('hoverPause', true);
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('show'), 1400);
+}
+
+function bisect(a, v) {
+  let lo = 0, hi = a.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] <= v) lo = m + 1; else hi = m; }
+  return lo; // number of starts <= v
+}
+
+async function play(path) {
+  $('#library').hidden = true;
+  $('#player').hidden = false;
+  $('#ep-title').textContent = 'Loading…';
+  const d = await api('/play', { video: path });
+  if (d.error && !d.lines?.length) toast(d.error);
+  Object.assign(P, { path, lines: d.lines || [], next: d.next, prev: d.prev, dir: d.dir, delay: 0, shown: -1, active: '' });
+  P.starts = P.lines.map((l) => l[1]);
+  document.title = `${d.name} - ani`;
+  $('#crumb').innerHTML = `<a href="/?dir=${encodeURIComponent(d.dir)}" style="color:inherit">${esc(d.series)}</a>`;
+  $('#ep-title').textContent = d.name;
+  $('#count').textContent = `${P.lines.length} lines`;
+  $('#prev-ep').disabled = !d.prev;
+  $('#next-ep').disabled = !d.next;
+  $('#offset').textContent = '0.0s';
+
+  const frag = document.createDocumentFragment();
+  P.els = P.lines.map(([parts, start, label], i) => {
+    const el = document.createElement('div');
+    el.className = 'ln';
+    el.hidden = true;
+    el.innerHTML = `<time>${label}</time><div class="jp">${lineHTML(parts)}</div>`;
+    el.onclick = () => { video.currentTime = start / 1000 + P.delay; };
+    frag.appendChild(el);
+    return el;
+  });
+  $('#lines').replaceChildren(frag);
+
+  video.src = '/video?path=' + encodeURIComponent(path);
+  video.addEventListener('loadedmetadata', () => { if (d.pos) video.currentTime = d.pos; video.play().catch(() => {}); }, { once: true });
+}
+
+function render() {
+  if (!P.path) return;
+  const ms = (video.currentTime - P.delay) * 1000;
+  const n = bisect(P.starts, ms);
+
+  // overlay: lines whose span covers now (overlaps allowed)
+  const active = [];
+  for (let i = n - 1; i >= 0 && i >= n - 6; i--) if (P.lines[i][3] > ms) active.unshift(i);
+  const key = active.join(',');
+  if (key !== P.active) {
+    P.active = key;
+    $('#overlay').innerHTML = active.map((i) => lineHTML(P.lines[i][0])).join('<span class="nl"></span>');
+    P.els.forEach((el) => el.classList.remove('now'));
+    active.forEach((i) => P.els[i].classList.add('now'));
+  }
+
+  // transcript: reveal lines already played (spoiler-free), follow if at bottom
+  if (n !== P.shown) {
+    const box = $('#lines');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || P.shown < 0;
+    P.els.forEach((el, i) => { el.hidden = i >= n; });
+    P.shown = n;
+    if (atBottom && n) P.els[n - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+function seekLine(delta) {
+  const ms = (video.currentTime - P.delay) * 1000;
+  let i = bisect(P.starts, ms) - 1;
+  if (delta < 0 && i >= 0 && ms - P.starts[i] < 800) i--; // near a line's start: go to the one before
+  i = Math.max(0, Math.min(P.lines.length - 1, delta === 0 ? Math.max(i, 0) : i + (delta > 0 ? 1 : 0)));
+  if (P.lines[i]) video.currentTime = P.lines[i][1] / 1000 + P.delay;
+}
+
+function setDelay(d) {
+  P.delay = Math.round(d * 10) / 10;
+  $('#offset').textContent = `${P.delay > 0 ? '+' : ''}${P.delay.toFixed(1)}s`;
+  P.active = null;
+  toast(`Subtitle offset ${$('#offset').textContent}`);
+}
+
+function setHoverPause(on) {
+  hoverPause = on;
+  store.set('hoverPause', on);
+  $('#hover-pause').setAttribute('aria-pressed', String(on));
+}
+
+function saveProgress() {
+  if (!P.path || !video.duration) return;
+  navigator.sendBeacon('/progress', JSON.stringify({ video: P.path, pos: video.currentTime, dur: video.duration }));
+}
+
+const go = (path) => { if (path) location.href = '/?v=' + encodeURIComponent(path); };
+const toggleFull = () => document.fullscreenElement ? document.exitFullscreen() : $('#stage').requestFullscreen();
+
+video.addEventListener('timeupdate', render);
+video.addEventListener('seeked', render);
+video.addEventListener('play', () => { P.hoverPaused = false; $('#upnext').hidden = true; });
+video.addEventListener('pause', saveProgress);
+video.addEventListener('ended', () => { saveProgress(); if (P.next) $('#upnext').hidden = false; });
+video.addEventListener('dblclick', (e) => { e.preventDefault(); toggleFull(); });
+// pause while reading the subtitle; resume once the mouse is back on the picture
+$('#overlay').addEventListener('mouseenter', () => { if (hoverPause && !video.paused) { video.pause(); P.hoverPaused = true; } });
+video.addEventListener('mouseenter', () => { if (P.hoverPaused) video.play(); });
+$('#upnext').onclick = () => go(P.next);
+$('#prev-ep').onclick = () => go(P.prev);
+$('#next-ep').onclick = () => go(P.next);
+$('#hover-pause').onclick = () => setHoverPause(!hoverPause);
+setHoverPause(hoverPause);
+addEventListener('pagehide', saveProgress);
+
+document.addEventListener('keydown', (e) => {
+  if ($('#player').hidden || e.target.closest('input, textarea, select, dialog') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const actions = {
+    ' ': () => video.paused ? video.play() : video.pause(), k: () => video.paused ? video.play() : video.pause(),
+    ArrowLeft: () => seekLine(-1), a: () => seekLine(-1), ArrowRight: () => seekLine(1), d: () => seekLine(1),
+    r: () => { seekLine(0); video.play(); }, f: toggleFull,
+    '[': () => setDelay(P.delay - 0.1), ']': () => setDelay(P.delay + 0.1),
+    n: () => go(P.next), p: () => go(P.prev), h: () => { setHoverPause(!hoverPause); toast(`Hover pause ${hoverPause ? 'on' : 'off'}`); },
+    l: () => location.href = '/?dir=' + encodeURIComponent(P.dir),
+  };
+  if (actions[k]) { e.preventDefault(); e.stopPropagation(); actions[k](); }
+}, true);
+
+/* server heartbeat: playback clock for card matching, new-card check, progress */
+setInterval(() => {
+  if (!P.path) return;
+  api('/update', { time: video.currentTime - P.delay, delay: P.delay })
+    .then(() => $('#dot').classList.add('on'), () => $('#dot').classList.remove('on'));
+}, 250);
+setInterval(() => { if (P.path && !document.hidden) api('/check', {}).catch(() => {}); }, 1500);
+setInterval(() => { if (!video.paused) saveProgress(); }, 5000);
+
+/* routing */
+(async () => {
+  const q = new URLSearchParams(location.search);
+  if (q.has('continue')) {
+    const { video: v } = await api('/api/continue');
+    if (v) { history.replaceState(null, '', '/?v=' + encodeURIComponent(v)); return play(v); }
+  }
+  if (q.get('v')) return play(q.get('v'));
+  showLibrary(q.get('dir'));
+  fetch('/options').then(() => $('#dot').classList.add('on'), () => {});
+})();
+</script>
+</body>
+</html>
