@@ -1034,6 +1034,7 @@ class Server(BaseHTTPRequestHandler):
                     save_state()
             self.send(body={})
         elif path == "/quit":
+            log_event("stopping: quit requested (ani --stop)")
             self.send(body={})
             threading.Thread(target=self.server.shutdown).start()
         elif path == "/options":
@@ -1048,12 +1049,24 @@ class Server(BaseHTTPRequestHandler):
         pass
 
 
+def log_event(msg):
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
+
+
 if __name__ == "__main__":
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"ani server on http://127.0.0.1:{PORT}", flush=True)
     with ThreadingHTTPServer(("127.0.0.1", PORT), Server) as server:
+        log_event(f"ani server on http://127.0.0.1:{PORT} (pid {os.getpid()})")
+
+        def stop(signum, _frame):  # say why the server went away instead of vanishing
+            log_event(f"stopping on {signal.Signals(signum).name}")
+            threading.Thread(target=server.shutdown).start()  # shutdown() waits for serve_forever
+
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(sig, stop)
         try:
             server.serve_forever()
         finally:
             for child in list(CHILDREN):
                 kill_group(child)
+            log_event("stopped")
