@@ -336,20 +336,18 @@ SUB_PENALTIES = ("7", "30")  # alass's default, and one that resists splitting
 AGREE = 0.5  # share of synced lines that must start on a reference line to trust a subtitle reference
 
 
-def reference_track(file):
-    """(stream index, extension) of an embedded full-dialogue text subtitle, which whoever muxed
-    the release timed to this exact video; None without one."""
+def reference_tracks(file):
+    """(stream index, extension) of each embedded full-dialogue text subtitle, which whoever muxed
+    the release timed to this exact video."""
     r = run(["ffprobe", "-v", "error", "-select_streams", "s", "-show_entries",
              "stream=index,codec_name:stream_tags=title", "-of", "json", file], timeout=30)
     try:
         streams = json.loads(r.stdout).get("streams", [])
     except ValueError:
-        return None
-    for st in streams:
-        ext = {"ass": ".ass", "ssa": ".ass", "subrip": ".srt"}.get(st.get("codec_name"))
-        if ext and not REF_SKIP.search(st.get("tags", {}).get("title", "")):
-            return st["index"], ext
-    return None
+        return []
+    return [(st["index"], ext) for st in streams
+            if (ext := {"ass": ".ass", "ssa": ".ass", "subrip": ".srt"}.get(st.get("codec_name")))
+            and not REF_SKIP.search(st.get("tags", {}).get("title", ""))]
 
 
 def agreement(lines, ref):
@@ -383,14 +381,17 @@ def sync(video, sub, background=False):
             a = Path(tmp, "a.wav")
             audio = [FFMPEG, "-nostdin", "-v", "error", "-i", str(v), "-map", audio_stream(str(video)), "-vn",
                      "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", str(a)]
-            ref_sub = None
-            if track := reference_track(str(video)):
-                ref_sub = Path(tmp, "ref" + track[1])
-                x = run(audio + ["-map", f"0:{track[0]}", "-c:s", "copy", str(ref_sub)], low=background)
-                if x.returncode != 0:
-                    ref_sub = None
-            if not ref_sub:
+            ref_sub, refs = None, [(Path(tmp, f"ref{i}{ext}"), i) for i, ext in reference_tracks(str(video))]
+            x = run(audio + [a for ref, i in refs for a in ("-map", f"0:{i}", "-c:s", "copy", str(ref))], low=background)
+            if x.returncode != 0 and refs:
+                refs = []
                 x = run(audio, low=background)
+            # Several tracks can qualify, and some are mostly animated typesetting, dense enough that
+            # any timing seems to agree with them; the one with about as many lines as the Japanese
+            # subtitle is real dialogue, in whatever language.
+            n = len(parse_sub(s))
+            if have := [ref for ref, _ in refs if ref.exists()]:
+                ref_sub = min(have, key=lambda ref: abs(len(parse_sub(ref)) - n))
             part = out.with_name(f".{out.name}.part")
             if ref_sub and ref_sub.exists():
                 # alass's default split penalty over-splits against subtitles on some releases, so try

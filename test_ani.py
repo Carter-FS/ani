@@ -312,6 +312,20 @@ if _sh.which("ffmpeg") and _alass:
         synced = s.ensure_synced(clip)
         assert synced.name == f"Clip - {n}.ani.srt", synced
         assert abs(s.make_session(str(clip), synced).lines[0][1] - start) < 300, (title, synced.read_text())
+    # a dense typesetting track muxed first must not win over the real dialogue track after it: its
+    # cues bunch around the unsynced lines (2-3s, 6-7s), so aligning to it would leave them there
+    ts = lambda ms: f"00:00:{ms // 1000:02},{ms % 1000:03}"
+    dense = media / "dense.srt"
+    dense.write_text("".join(f"{i + 1}\n{ts(t)} --> {ts(t + 20)}\nsign\n\n" for i, t in
+                             enumerate([*range(2000, 3000, 25), *range(6000, 7000, 25)])))
+    clip = media / "Clip - 05.mkv"
+    _sp.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(solo), "-i", str(dense), "-i", str(ref), "-map", "0",
+             "-map", "1", "-map", "2", "-c", "copy", "-metadata:s:s:0", "title=Dialogue",
+             "-metadata:s:s:1", "title=Dialogue", str(clip)], check=True)
+    (media / "Clip - 05.srt").write_bytes(sjis.read_bytes())
+    old(clip)
+    synced = s.ensure_synced(clip)
+    assert abs(s.make_session(str(clip), synced).lines[0][1] - 4000) < 300, synced.read_text()
 
 # agreement: share of lines starting within 0.5s of a reference cue
 cues = lambda *ms: [[["x"], t, "", t + 500, ""] for t in ms]
