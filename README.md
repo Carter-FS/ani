@@ -4,6 +4,8 @@ Watch local anime in the browser with Yomitan-scannable subtitles and one-click 
 
 Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, reworked to run in the browser on macOS and Linux.
 
+<img width="1409" height="813" alt="image" src="https://github.com/user-attachments/assets/fc04f900-f5ad-406b-93d4-88c25efc305d" />
+
 ## Features
 
 - Subtitles drawn over the video as text, so Yomitan can scan them
