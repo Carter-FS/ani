@@ -299,6 +299,24 @@ if _sh.which("ffmpeg") and _alass:
     synced = s.ensure_synced(solo)
     assert synced.name == "Clip - 02.ani.srt", synced
     assert abs(s.make_session(str(solo), synced).lines[0][1] - 2000) < 300
+    # embedded full subtitles are the reference over the audio (here they deliberately disagree,
+    # at 4s and 8s); a signs-and-songs track is not
+    ref = media / "ref.srt"
+    ref.write_text("1\n00:00:04,000 --> 00:00:05,000\nYes\n\n2\n00:00:08,000 --> 00:00:09,000\nNo\n")
+    for n, title, start in (("03", "Full Subtitles", 4000), ("04", "Signs & Songs", 2000)):
+        clip = media / f"Clip - {n}.mkv"
+        _sp.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(solo), "-i", str(ref), "-map", "0", "-map", "1",
+                 "-c", "copy", "-metadata:s:s:0", f"title={title}", str(clip)], check=True)
+        (media / f"Clip - {n}.srt").write_bytes(sjis.read_bytes())
+        old(clip)
+        synced = s.ensure_synced(clip)
+        assert synced.name == f"Clip - {n}.ani.srt", synced
+        assert abs(s.make_session(str(clip), synced).lines[0][1] - start) < 300, (title, synced.read_text())
+
+# agreement: share of lines starting within 0.5s of a reference cue
+cues = lambda *ms: [[["x"], t, "", t + 500, ""] for t in ms]
+assert s.agreement(cues(1000, 5000), cues(1400, 9000)) == 0.5
+assert s.agreement(cues(), cues(1000)) == 0.0 and s.agreement(cues(1000), []) == 0.0
 
 # --- card checks: empty sentences never match; multi-card notes filled once; failures retried
 s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"], "0:a:0")

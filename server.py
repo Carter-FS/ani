@@ -321,13 +321,51 @@ def read_sub(path):
     return raw.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def parse_sub(path):
+    content = read_sub(path)
+    is_ass = content.lstrip().startswith("[Script Info]") or "\nDialogue:" in content
+    return parse_ass(content) if is_ass else parse_srt(content)
+
+
 def synced_name(video, sub):
     return video.with_name(video.stem + ".ani" + sub.suffix.lower())
 
 
+REF_SKIP = re.compile(r"sign|song|forced|karaoke", re.I)
+SUB_PENALTIES = ("7", "30")  # alass's default, and one that resists splitting
+AGREE = 0.5  # share of synced lines that must start on a reference line to trust a subtitle reference
+
+
+def reference_track(file):
+    """(stream index, extension) of an embedded full-dialogue text subtitle, which whoever muxed
+    the release timed to this exact video; None without one."""
+    r = run(["ffprobe", "-v", "error", "-select_streams", "s", "-show_entries",
+             "stream=index,codec_name:stream_tags=title", "-of", "json", file], timeout=30)
+    try:
+        streams = json.loads(r.stdout).get("streams", [])
+    except ValueError:
+        return None
+    for st in streams:
+        ext = {"ass": ".ass", "ssa": ".ass", "subrip": ".srt"}.get(st.get("codec_name"))
+        if ext and not REF_SKIP.search(st.get("tags", {}).get("title", "")):
+            return st["index"], ext
+    return None
+
+
+def agreement(lines, ref):
+    """Share of `lines` starting within half a second of a cue in `ref`."""
+    starts = sorted({c[1] for c in ref})
+    hits = 0
+    for c in lines:
+        i = bisect.bisect_left(starts, c[1] - 500)
+        hits += i < len(starts) and starts[i] <= c[1] + 500
+    return hits / len(lines) if lines else 0.0
+
+
 def sync(video, sub, background=False):
-    """Align `sub` to the video's audio with alass. Returns a hidden .part file beside the
-    video for the caller to publish, or None on failure."""
+    """Align `sub` to the video with alass: to the release's own embedded subtitles when they fit,
+    else to its Japanese audio. Returns a hidden .part file beside the video for the caller to
+    publish, or None on failure."""
     print(f"syncing {sub.name}", flush=True)
     out = synced_name(video, sub)
     # alass trips on [] in paths, so run it on clean symlinks; it also refuses format
@@ -341,19 +379,45 @@ def sync(video, sub, background=False):
             s.write_text(read_sub(sub), encoding="utf-8")  # alass only decodes UTF-8/UTF-16
             # Give alass just the Japanese audio: it only listens to the first audio track (often a
             # dub on dual-audio releases) and fails on files with font attachments of unknown type.
+            # The embedded subtitles come out in the same pass, so the file is read once.
             a = Path(tmp, "a.wav")
-            x = run([FFMPEG, "-nostdin", "-v", "error", "-i", str(v), "-map", audio_stream(str(video)), "-vn",
-                     "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", str(a)], low=background)
-            ref = a if x.returncode == 0 and a.exists() else v
-            r = run([ALASS, "--disable-fps-guessing", str(ref), str(s), str(o)], low=background)
-            if r.returncode != 0 or not o.exists():
-                msg = f"{r.stderr}\n{r.stdout}"
-                why = [ln.strip() for ln in msg.splitlines() if ln.strip().startswith(("error", "caused by"))]
-                print(f"alass failed on {video.name}: {' / '.join(why[:3]) or msg.strip()[-200:]}", flush=True)
-                return None
+            audio = [FFMPEG, "-nostdin", "-v", "error", "-i", str(v), "-map", audio_stream(str(video)), "-vn",
+                     "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", str(a)]
+            ref_sub = None
+            if track := reference_track(str(video)):
+                ref_sub = Path(tmp, "ref" + track[1])
+                x = run(audio + ["-map", f"0:{track[0]}", "-c:s", "copy", str(ref_sub)], low=background)
+                if x.returncode != 0:
+                    ref_sub = None
+            if not ref_sub:
+                x = run(audio, low=background)
             part = out.with_name(f".{out.name}.part")
-            shutil.copyfile(o, part)
-            return part
+            if ref_sub and ref_sub.exists():
+                # alass's default split penalty over-splits against subtitles on some releases, so try
+                # a stricter one too and keep whichever lands more lines on the reference
+                best, ref_lines = (0.0, None), parse_sub(ref_sub)
+                for penalty in SUB_PENALTIES:
+                    o.unlink(missing_ok=True)
+                    r = run([ALASS, "--disable-fps-guessing", "--split-penalty", penalty, str(ref_sub), str(s), str(o)],
+                            low=background)
+                    if r.returncode == 0 and o.exists() and (score := agreement(parse_sub(o), ref_lines)) > best[0]:
+                        best = score, o.read_bytes()
+                # a subtitle reference can belong to another episode or cut; then trust the audio
+                if best[0] >= AGREE:
+                    print(f"synced {sub.name} to the embedded subtitles ({best[0]:.0%} agree)", flush=True)
+                    part.write_bytes(best[1])
+                    return part
+            o.unlink(missing_ok=True)
+            r = run([ALASS, "--disable-fps-guessing", str(a if x.returncode == 0 and a.exists() else v), str(s), str(o)],
+                    low=background)
+            if r.returncode == 0 and o.exists():
+                print(f"synced {sub.name} to the audio", flush=True)
+                shutil.copyfile(o, part)
+                return part
+            msg = f"{r.stderr}\n{r.stdout}"
+            why = [ln.strip() for ln in msg.splitlines() if ln.strip().startswith(("error", "caused by"))]
+            print(f"alass failed on {video.name}: {' / '.join(why[:3]) or msg.strip()[-200:]}", flush=True)
+            return None
     except OSError as e:
         print(f"sync failed on {video.name}: {e}", flush=True)
         return None
@@ -647,11 +711,7 @@ def audio_stream(file):
 
 
 def make_session(file, sub_path):
-    lines = []
-    if sub_path:
-        content = read_sub(sub_path)
-        is_ass = content.lstrip().startswith("[Script Info]") or "\nDialogue:" in content
-        lines = parse_ass(content) if is_ass else parse_srt(content)
+    lines = parse_sub(sub_path) if sub_path else []
     return Session(token(), file, lines, [normalize_str("".join(ln[0])) for ln in lines],
                    audio_stream(file) if file else "0:a:0")
 

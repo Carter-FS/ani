@@ -10,7 +10,7 @@ Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, r
 
 - Subtitles drawn over the video as text, so Yomitan can scan them
 - Card fields filled through AnkiConnect: sentence, screenshot (JPEG) and sentence audio (MP3)
-- Subtitles synced to the video's audio with [alass](https://github.com/kaegi/alass) on first play; the rest of the season syncs in the background
+- Subtitles synced with [alass](https://github.com/kaegi/alass) on first play, to the release's own embedded subtitles when they fit, else to the Japanese audio track; the rest of the season syncs in the background
 - Library with thumbnails and watch progress; resumes where you left off
 - Drag and drop episodes or subtitles onto a series to move them in and sync them
 - Spoiler-free transcript, pause on hovering the subtitle, line-by-line navigation
@@ -58,6 +58,8 @@ ani --stop                 # stop the background server
 ```
 
 With a subtitle folder, each video is matched to a subtitle by episode number (`S01E03`, `- 03`, `第3話`). Synced subtitles are saved next to each video as `<video>.ani.srt` (or `.ani.ass`); files you provide are never modified. Files still being written are synced once unchanged for a minute.
+
+The browser plays the first audio track it can decode, so put the Japanese track first on dual-audio releases. A track the browser can't decode is skipped, which happened with FLAC in MKV under Zen (Firefox-based).
 
 To add episodes from the browser, drop files onto a series page or use **Add episodes**. Browsers do not expose file paths, so the server finds each file by name and size in the `ANI_SEARCH` folders and moves it into the series. Subtitles go to the series' subtitle folder.
 
