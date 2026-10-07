@@ -263,27 +263,42 @@ t0 = time.time()
 r = s.run(["sh", "-c", "sleep 30 & sleep 30"], timeout=1)
 assert r.returncode == -9 and time.time() - t0 < 5 and "timed out" in r.stderr
 
-# real tools on synthetic media: Shift-JIS subtitles sync; card audio prefers the Japanese track
+# real tools on synthetic media: Shift-JIS subtitles sync to the Japanese track; card audio prefers it too
 import shutil as _sh, subprocess as _sp  # noqa: E402
-if _sh.which("ffmpeg") and _sh.which("alass-cli"):
+_alass = _sh.which("alass-cli") or _sh.which("alass")
+if _sh.which("ffmpeg") and _alass:
     media = tmpdir()
     vid = media / "Clip - 01.mkv"
-    # beeps at 2-3s and 6-7s on a Japanese track, an English (default) track first
+    # beeps at 2-3s and 6-7s on a Japanese track, an English (default) track first, and a font
+    # attachment of unknown type (alass 2.0 can't parse ffprobe's output for those)
+    (media / "font.bin").write_bytes(b"font")
     _sp.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=10",
              "-f", "lavfi", "-i", "sine=f=800:d=10", "-f", "lavfi", "-i", "sine=f=500:d=10",
              "-filter_complex", "[2:a]volume='if(between(t,2,3)+between(t,6,7),1,0)':eval=frame[jp]",
              "-map", "0:v", "-map", "1:a", "-map", "[jp]", "-metadata:s:a:0", "language=eng",
              "-metadata:s:a:1", "language=jpn", "-disposition:a:0", "default", "-c:v", "libx264",
-             "-c:a", "aac", "-shortest", str(vid)], check=True)
+             "-c:a", "aac", "-attach", str(media / "font.bin"), "-metadata:s:t", "mimetype=application/octet-stream",
+             "-shortest", str(vid)], check=True)
     assert s.audio_stream(str(vid)) == "0:a:1"
     sjis = media / "Clip - 01.srt"
     sjis.write_bytes("1\n00:00:02,500 --> 00:00:03,500\nはい\n\n2\n00:00:06,500 --> 00:00:07,500\nいいえ\n".encode("cp932"))
     old(vid)
-    s.ALASS = _sh.which("alass-cli")
+    s.ALASS = _alass
     s.STATE["series"][str(media)] = {"subs": None}
     synced = s.ensure_synced(vid)
     assert synced.name == "Clip - 01.ani.srt", synced  # synced, not the raw fallback
-    assert s.make_session(str(vid), synced).lines[0][0] == ["はい"]
+    lines = s.make_session(str(vid), synced).lines
+    assert lines[0][0] == ["はい"]
+    assert abs(lines[0][1] - 2000) < 300, lines  # aligned to the Japanese track, not the first one
+    # Japanese track only, still with the attachment
+    solo = media / "Clip - 02.mkv"
+    _sp.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(vid), "-map", "0:v", "-map", "0:a:1", "-map", "0:t",
+             "-c", "copy", str(solo)], check=True)
+    (media / "Clip - 02.srt").write_bytes(sjis.read_bytes())
+    old(solo)
+    synced = s.ensure_synced(solo)
+    assert synced.name == "Clip - 02.ani.srt", synced
+    assert abs(s.make_session(str(solo), synced).lines[0][1] - 2000) < 300
 
 # --- card checks: empty sentences never match; multi-card notes filled once; failures retried
 s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"], "0:a:0")

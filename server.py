@@ -339,7 +339,13 @@ def sync(video, sub, background=False):
                        Path(tmp, "o" + sub.suffix.lower()))
             v.symlink_to(video)
             s.write_text(read_sub(sub), encoding="utf-8")  # alass only decodes UTF-8/UTF-16
-            r = run([ALASS, "--disable-fps-guessing", str(v), str(s), str(o)], low=background)
+            # Give alass just the Japanese audio: it only listens to the first audio track (often a
+            # dub on dual-audio releases) and fails on files with font attachments of unknown type.
+            a = Path(tmp, "a.wav")
+            x = run([FFMPEG, "-nostdin", "-v", "error", "-i", str(v), "-map", audio_stream(str(video)), "-vn",
+                     "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", str(a)], low=background)
+            ref = a if x.returncode == 0 and a.exists() else v
+            r = run([ALASS, "--disable-fps-guessing", str(ref), str(s), str(o)], low=background)
             if r.returncode != 0 or not o.exists():
                 msg = f"{r.stderr}\n{r.stdout}"
                 why = [ln.strip() for ln in msg.splitlines() if ln.strip().startswith(("error", "caused by"))]
