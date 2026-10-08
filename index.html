@@ -229,21 +229,26 @@ const form = $('#settings-form');
 const fill = (opts) => { for (const [k, v] of Object.entries(opts)) if (form.elements[k]) form.elements[k].value = String(v).replace(/^"|"$/g, ''); };
 const options = (list) => list.map((v) => `<option value="${escAttr(v)}">`).join('');
 const ankiDown = 'Anki isn\'t reachable. Open Anki and make sure the AnkiConnect add-on is installed.';
+const aniDown = 'ani isn\'t running. Start it from Tools > ani: Library in Anki, or run ani in a terminal.';
 $('#open-settings').onclick = async () => {
-  fill(await api('/options'));
+  const opts = await api('/options').catch(() => null);
+  if (opts) fill(opts);
   $('#yomitan').hidden = true;
-  $('#anki-status').textContent = 'Connecting to Anki...';
+  $('#anki-status').textContent = opts ? 'Connecting to Anki...' : aniDown;
   $('#settings').showModal();
+  if (!opts) return;
   const a = await api('/api/anki').catch(() => ({ error: true }));
   $('#anki-status').textContent = a.error ? ankiDown : 'Connected to Anki. Pick a deck, or type a new name and create the note type.';
   if (!a.error) { $('#decks').innerHTML = options(a.decks); $('#fields').innerHTML = options(a.fields); }
 };
-$('#make-type').onclick = async () => {
+$('#make-type').onclick = async (e) => {
+  e.target.disabled = true;
   const r = await api('/api/note-type', { deck: form.elements.deck.value }).catch(() => ({ error: true }));
-  if (r.error) return $('#anki-status').textContent = ankiDown;
+  e.target.disabled = false;
+  if (r.error) return $('#anki-status').textContent = r.down || r.error === true ? ankiDown : `Anki said: ${r.error}`;
   fill(r);
   $('#anki-status').textContent = `Done: deck "${r.deck}" with note type "${r.model}". These settings are saved.`;
-  $('#yomitan').innerHTML = `Last step, in Yomitan's settings under Anki &gt; Configure Anki card format: pick deck <b>${escName(r.deck)}</b> and model <b>${r.model}</b>, then fill in
+  $('#yomitan').innerHTML = `Last step, in Yomitan's settings under Anki &gt; Configure Anki card format: pick deck <b>${escName(r.deck)}</b> and model <b>${escName(r.model)}</b>, then fill in
     <ul><li>Expression: <code>{expression}</code></li><li>Reading: <code>{reading}</code></li><li>Meaning: <code>{glossary}</code></li>
     <li>Sentence: <code>{sentence}</code></li><li>WordAudio: <code>{audio}</code></li></ul>Leave Picture and SentenceAudio empty: ani fills them.`;
   $('#yomitan').hidden = false;
@@ -252,9 +257,12 @@ $('#make-type').onclick = async () => {
 /* stop */
 $('#stop').onclick = async () => {
   if (!confirm('Stop ani? Background subtitle syncing stops too.')) return;
-  await api('/quit', {}).catch(() => {});
-  video.pause();
+  saveProgress();
+  if (!(await api('/quit', {}).then(() => true, () => false)) && (await fetch('/options').then(() => true, () => false))) {
+    return alert('ani didn\'t stop. Try again, or use Tools > ani: Stop in Anki.');
+  }
   P.path = null;  // ends the heartbeat and card checks
+  video.pause();
   clearTimeout(libTimer);
   $('#player').hidden = true;
   $('#dot').classList.remove('on');

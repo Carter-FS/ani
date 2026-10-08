@@ -1,7 +1,9 @@
 #!/bin/sh
 # Builds the per-platform tool bundles (ffmpeg, ffprobe, alass-cli) the add-on downloads on first
-# run, into dist/. Upload them to the release named in addon/__init__.py and update the checksums.
-# Needs curl, unzip, tar and cargo (alass has no macOS release, so it is built here; run on Apple Silicon).
+# run, into dist/. ffmpeg comes from each builder's latest release, so every run gives new bundles:
+# publish them under a NEW tag (tools-2, ...) and update RELEASE and the checksums in addon/__init__.py.
+# Re-uploading to a published tag breaks every install that has the old checksums.
+# Runs on macOS with curl, unzip and cargo (alass has no macOS release, so it is built here).
 set -eu
 cd "$(dirname "$0")/.."
 work=$(mktemp -d)
@@ -28,7 +30,7 @@ EOT
             "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$ff/release/$t.zip"
         unzip -q -o "$work/$t.zip" -d "$d"
     done
-    cargo install alass-cli --locked --target "$rust-apple-darwin" --root "$work/alass-$name" -q
+    cargo install alass-cli --version 2.0.0 --locked --target "$rust-apple-darwin" --root "$work/alass-$name" -q
     cp "$work/alass-$name/bin/alass-cli" "$d/"
     bundle "mac-$name" "$d"
 done
@@ -43,8 +45,8 @@ bundle win64 "$d"
 
 # Linux x64
 d="$work/linux64"; mkdir -p "$d"
-curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
-    | tar -xJ -C "$work" --strip-components 1 '*/ffmpeg' '*/ffprobe'  # macOS bsdtar matches globs
+curl -fsSL -o "$work/ff.tar.xz" https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+tar -xJf "$work/ff.tar.xz" -C "$work" --strip-components 1 '*/ffmpeg' '*/ffprobe'  # macOS bsdtar matches globs
 mv "$work/ffmpeg" "$work/ffprobe" "$d/"
 curl -fsSL -o "$d/alass-cli" https://github.com/kaegi/alass/releases/download/v2.0.0/alass-linux64
 bundle linux64 "$d"

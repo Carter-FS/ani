@@ -33,13 +33,15 @@ from . import server  # noqa: E402  reads ANI_STATE and PATH on import
 
 URL = f"http://127.0.0.1:{server.PORT}"
 ANKICONNECT = 2055492159
-RELEASE = "https://github.com/Carter-FS/ani/releases/download/tools-1/"
+RELEASE = "https://github.com/Carter-FS/ani/releases/download/tools-1/"  # never re-upload to a published tag
 BUNDLES = {  # (sys.platform, machine) -> (file, sha256); built by addon/tools.sh
     ("darwin", "arm64"): ("ani-tools-mac-arm64.zip", "8498aaaf5d3dea4e1f5b6ace8e01c131ee3b60053c25225233368266d868596a"),
     ("darwin", "x86_64"): ("ani-tools-mac-x64.zip", "9bc7f0d9812dfd75ff3279531076820b346ae9aac100dcd82da90b70304182ec"),
     ("win32", "AMD64"): ("ani-tools-win64.zip", "e460fd0f750cb37a22163d489f11d15d52ffb87a4741bd62bce14bf3651ecc25"),
     ("linux", "x86_64"): ("ani-tools-linux64.zip", "fad36621ec4a971a3716a7c767c4ffa43e5055b15abd4e0f11baaa967a2cf363"),
 }
+BUNDLES[("win32", "ARM64")] = BUNDLES[("win32", "AMD64")]  # Windows on Arm runs x64 tools emulated
+
 
 
 def tools_missing():
@@ -52,11 +54,15 @@ def fetch_tools(name, sha):
         data = r.read()
     if hashlib.sha256(data).hexdigest() != sha:
         raise ValueError("the download was corrupted")
-    BIN.mkdir(parents=True, exist_ok=True)
+    # unpack beside bin, then swap it in whole: a crash mid-extract never leaves half-written tools
+    part = BIN.with_name("bin.part")
+    shutil.rmtree(part, ignore_errors=True)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        z.extractall(BIN)
-    for f in BIN.iterdir():
+        z.extractall(part)
+    for f in part.iterdir():
         f.chmod(0o755)  # zip drops the executable bit
+    shutil.rmtree(BIN, ignore_errors=True)
+    part.replace(BIN)
 
 
 FETCHING = threading.Event()  # a profile switch mid-download mustn't start a second one
@@ -71,45 +77,75 @@ def ensure_tools():
     FETCHING.set()
     tooltip("ani: downloading ffmpeg and alass, about 80 MB. This happens once.", period=8000)
 
-    def done(fut):
+    def done(error):
         FETCHING.clear()
-        try:
-            fut.result()
-            tooltip("ani is ready: Tools &gt; ani: Library")
-        except Exception as e:  # noqa: BLE001  any failure here just means "try again next start"
-            showWarning(f"ani couldn't download its tools ({e}). It will try again next time Anki starts.",
-                        title="ani")
+        if error:
+            return showWarning(f"ani couldn't download its tools ({error}). It will try again next time Anki starts.",
+                               title="ani")
+        server.FAILED.clear()  # syncs tried before the tools arrived get another go
+        tooltip("ani is ready: Tools &gt; ani: Library")
 
-    mw.taskman.run_in_background(lambda: fetch_tools(*bundle), done)
+    def work():
+        # A plain daemon thread, not Anki's task queue: that one also runs syncs and reviews, and
+        # Anki's exit would wait for the download.
+        try:
+            fetch_tools(*bundle)
+            error = None
+        except Exception as e:  # noqa: BLE001  any failure here just means "try again next start"
+            error = e
+        mw.taskman.run_on_main(lambda: done(error))
+
+    threading.Thread(target=work, daemon=True, name="ani tools").start()
 
 
 def ensure_ankiconnect():
-    # ponytail: asks every start until installed; remember a "no" if that gets annoying
-    if str(ANKICONNECT) not in mw.addonManager.allAddons() and askUser(
-            "ani needs the AnkiConnect add-on so Yomitan can add cards. Install it now?", title="ani"):
-        download_addons(mw, mw.addonManager, [ANKICONNECT], lambda log: show_log_to_user(mw, log))
+    """Offer to install AnkiConnect, from AnkiWeb or by hand under any folder name."""
+    mgr = mw.addonManager
+    found = [d for d in mgr.allAddons() if d == str(ANKICONNECT) or "ankiconnect" in mgr.addonName(d).lower().replace(" ", "")]
+    if not found:
+        # ponytail: asks every start until installed; remember a "no" if that gets annoying
+        if askUser("ani needs the AnkiConnect add-on so Yomitan can add cards. Install it now?", title="ani"):
+            download_addons(mw, mgr, [ANKICONNECT], lambda log: show_log_to_user(mw, log))
+    elif not any(mgr.isEnabled(d) for d in found):
+        showWarning("AnkiConnect is turned off, so Yomitan can't add cards. Turn it on in Tools &gt; Add-ons "
+                    "and restart Anki.", title="ani")
 
 
-HTTPD = None
+THREAD = None
+
+
+def running():
+    try:
+        with urllib.request.urlopen(URL + "/options", timeout=2) as r:
+            return isinstance(json.load(r), dict)
+    except (OSError, ValueError):
+        return False
 
 
 def start_server():
-    """Start the server unless it is running; it also stops from the page's stop button."""
-    global HTTPD
-    if HTTPD:
-        return
+    """Start the server unless it is running. Returns whether ani answers on its port."""
+    global THREAD
+    if THREAD and THREAD.is_alive():
+        if not server.STOPPED.is_set():
+            return True
+        THREAD.join(2)  # stopping: let it free the port
+    server.STOPPED.clear()
     try:
-        HTTPD = server.ThreadingHTTPServer(("127.0.0.1", server.PORT), server.Server)
-    except OSError:  # most likely the ani command's own server, which works just as well
-        return
-    threading.Thread(target=serve, args=(HTTPD,), daemon=True, name="ani").start()
+        httpd = server.Http(("127.0.0.1", server.PORT), server.Server)
+    except OSError:  # the port is taken: fine if it's the ani command's own server
+        if running():
+            return True
+        showWarning(f"Another program is using port {server.PORT}, so ani can't start. Close it, or set the "
+                    "ANI_PORT environment variable to another port.", title="ani")
+        return False
+    THREAD = threading.Thread(target=serve, args=(httpd,), daemon=True, name="ani")
+    THREAD.start()
+    return True
 
 
 def serve(httpd):
-    global HTTPD
     with httpd:
         httpd.serve_forever()  # returns after /quit
-    HTTPD = None
     stop_tools()
 
 
@@ -127,12 +163,13 @@ def stop():
 
 
 def library():
-    start_server()
-    openLink(URL + "/?continue")
+    if start_server():
+        openLink(URL + "/?continue")
 
 
 def add_series():
-    start_server()
+    if not start_server():
+        return
     folder = QFileDialog.getExistingDirectory(mw, "ani: choose the folder with the episodes")
     if not folder:
         return
@@ -143,18 +180,22 @@ def add_series():
     try:
         urllib.request.urlopen(urllib.request.Request(URL + "/register", json.dumps(body).encode()), timeout=10).close()
     except urllib.error.HTTPError as e:
-        return showWarning(f"ani couldn't add that folder: {json.load(e).get('error', e)}", title="ani")
+        try:
+            why = json.load(e).get("error", e)
+        except ValueError:
+            why = e
+        return showWarning(f"ani couldn't add that folder: {why}", title="ani")
     except OSError as e:
         return showWarning(f"ani couldn't add that folder: {e}", title="ani")
     openLink(URL + "/?dir=" + quote(folder))
 
 
 def on_profile():
+    start_server()
     ensure_ankiconnect()
     ensure_tools()
 
 
-start_server()
 atexit.register(stop_tools)
 for text, fn in (("ani: Library", library), ("ani: Add series...", add_series), ("ani: Stop", stop)):
     action = QAction(text, mw)

@@ -22,6 +22,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+for _stream in (sys.stdout, sys.stderr):  # a Japanese file name must never crash a log line
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 BASE = Path(__file__).parent.resolve()
 STATE_DIR = Path(os.environ.get("ANI_STATE")
                  or Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")) / "ani").expanduser()
@@ -48,12 +52,14 @@ LOW_PRIORITY = ["nice", "-n", "10"] if shutil.which("nice") else []
 
 
 CHILDREN = set()  # tool processes in flight, killed on shutdown so none are orphaned
+STOPPED = threading.Event()  # set by /quit: no new tools start (the add-on outlives its server)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console flash per tool on Windows
 
 
 def kill_group(p):
     try:
-        if os.name == "nt":
-            p.kill()  # ponytail: just the tool; an ffmpeg alass started finishes on its own
+        if os.name == "nt":  # the tool and anything it started (alass runs ffmpeg)
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
         else:
             os.killpg(p.pid, signal.SIGKILL)  # the tool and anything it started (alass runs ffmpeg)
     except OSError:
@@ -63,12 +69,14 @@ def kill_group(p):
 def run(cmd, low=False, timeout=600):
     """Run a tool without a terminal (ffmpeg would grab the tty), capturing output. A run that
     hangs (e.g. on a file still being written) is killed after `timeout` seconds."""
+    if STOPPED.is_set():
+        return subprocess.CompletedProcess(cmd, -9, "", "error: ani is stopping")
     if low:
         cmd = LOW_PRIORITY + cmd
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              encoding="utf-8", errors="replace", start_new_session=True,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))  # no console flash on Windows
+                             creationflags=NO_WINDOW)
     except OSError as e:  # tool not installed
         return subprocess.CompletedProcess(cmd, 127, "", str(e))
     CHILDREN.add(p)
@@ -377,7 +385,10 @@ def sync(video, sub, background=False):
         with tempfile.TemporaryDirectory() as tmp:
             v, s, o = (Path(tmp, "v" + video.suffix), Path(tmp, "s" + sub.suffix.lower()),
                        Path(tmp, "o" + sub.suffix.lower()))
-            v.symlink_to(video)
+            try:
+                v.symlink_to(video)
+            except OSError:  # Windows allows symlinks only to admins or in Developer Mode
+                v = video
             s.write_text(read_sub(sub), encoding="utf-8")  # alass only decodes UTF-8/UTF-16
             # Give alass just the Japanese audio: it only listens to the first audio track (often a
             # dub on dual-audio releases) and fails on files with font attachments of unknown type.
@@ -525,7 +536,8 @@ def ensure_synced(video, retry=True, background=False):
         generation = RESYNCS[video]
         part = sync(video, sub, background)
         if not part:
-            FAILED[video] = fail_key(video, sub)
+            if not STOPPED.is_set():  # a sync cut short by a stop gets another go next time
+                FAILED[video] = fail_key(video, sub)
             return sub
         try:
             current = source_sub(video) == sub and RESYNCS[video] == generation
@@ -559,6 +571,8 @@ def sync_season(folder):
             while (todo := [v for v in episodes(folder) if needs_sync(v)]) and todo != last:
                 last = todo
                 for v in todo:
+                    if STOPPED.is_set():
+                        return
                     try:
                         ensure_synced(v, background=True)  # low priority: never hitch playback
                     except (LookupError, OSError):
@@ -571,7 +585,7 @@ def sync_season(folder):
 
 
 SEARCH_ROOTS = [Path(p).expanduser() for p in os.environ.get(
-    "ANI_SEARCH", "~/Downloads:~/Desktop:~/Movies:~/Videos").split(os.pathsep)]
+    "ANI_SEARCH", os.pathsep.join(["~/Downloads", "~/Desktop", "~/Movies", "~/Videos"])).split(os.pathsep)]
 
 
 def find_original(name, size, mtime_ms=None, roots=None, depth=4):
@@ -688,10 +702,11 @@ OPTIONS.update(load_json(OPTIONS_PATH, {}))
 
 NOTE_TYPE = "ani"  # the note type "Create note type" makes; its field names are OPTIONS' defaults
 NOTE_FIELDS = ["Expression", "Reading", "Meaning", "Sentence", "Picture", "SentenceAudio", "WordAudio"]
-NOTE_FRONT = '<div class="sentence">{{Sentence}}</div><div class="word">{{Expression}}</div>'
-NOTE_BACK = ('{{FrontSide}}<hr id="answer"><div class="reading">{{Reading}}</div>{{Picture}}'
+NOTE_FRONT = '<div lang="ja" class="sentence">{{Sentence}}</div><div lang="ja" class="word">{{Expression}}</div>'
+NOTE_BACK = ('{{FrontSide}}<hr id="answer"><div lang="ja" class="reading">{{Reading}}</div>{{Picture}}'
              '<div class="meaning">{{Meaning}}</div>{{SentenceAudio}} {{WordAudio}}')
-NOTE_CSS = (".card { font-family: sans-serif; font-size: 22px; text-align: center; }\n"
+NOTE_CSS = (".card { font-family: 'Hiragino Sans', 'Yu Gothic', 'Noto Sans CJK JP', sans-serif; font-size: 22px;"
+            " text-align: center; }\n"
             ".sentence { font-size: 28px; } .sentence b { color: #e0632b; }\n"
             ".word { font-size: 18px; opacity: 0.7; margin-top: 0.5em; }\n"
             ".meaning { font-size: 18px; text-align: left; } img { max-width: 100%; }")
@@ -708,17 +723,23 @@ def save_options():
 
 def anki_lists():
     """Deck and field names for the settings form's suggestions."""
-    models = invoke("modelNames")
-    fields = {f for m in models for f in invoke("modelFieldNames", modelName=m)}
-    return {"decks": sorted(invoke("deckNames")), "fields": sorted(fields)}
+    fields = {f for m in invoke("modelNames") or [] for f in invoke("modelFieldNames", modelName=m) or []}
+    return {"decks": sorted(invoke("deckNames") or []), "fields": sorted(fields)}
+
+
+NOTE_LOCK = threading.Lock()
 
 
 def create_note_type(deck):
     """Make the deck and the ani note type (unless they exist) and point the options at them."""
-    invoke("createDeck", deck=deck)
-    if NOTE_TYPE not in invoke("modelNames"):
-        invoke("createModel", modelName=NOTE_TYPE, inOrderFields=NOTE_FIELDS, css=NOTE_CSS,
-               cardTemplates=[{"Name": "Mining", "Front": NOTE_FRONT, "Back": NOTE_BACK}])
+    with NOTE_LOCK:  # a double click must not create it twice
+        invoke("createDeck", deck=deck)
+        if NOTE_TYPE not in (invoke("modelNames") or []):
+            invoke("createModel", modelName=NOTE_TYPE, inOrderFields=NOTE_FIELDS, css=NOTE_CSS,
+                   cardTemplates=[{"Name": "Mining", "Front": NOTE_FRONT, "Back": NOTE_BACK}])
+        elif missing := sorted(set(NOTE_FIELDS) - set(invoke("modelFieldNames", modelName=NOTE_TYPE) or [])):
+            raise AnkiError(f'the "{NOTE_TYPE}" note type has no {", ".join(missing)} field; '
+                            "rename it in Anki or add the fields back")
     OPTIONS.update(deck=deck, sentence="Sentence", expression="Expression", picture="Picture", audio="SentenceAudio")
     save_options()
 
@@ -877,6 +898,12 @@ def parse_range(header, size):
 
 class BadRequest(Exception):
     pass
+
+
+class Http(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port already in use, so two ani
+    # servers would share it silently instead of the second one failing.
+    allow_reuse_address = os.name != "nt"
 
 
 class Server(BaseHTTPRequestHandler):
@@ -1078,6 +1105,7 @@ class Server(BaseHTTPRequestHandler):
             self.send(body={})
         elif path == "/quit":
             log_event("stopping: quit requested")
+            STOPPED.set()
             self.send(body={})
             threading.Thread(target=self.server.shutdown).start()
         elif path == "/options":
@@ -1087,8 +1115,8 @@ class Server(BaseHTTPRequestHandler):
         elif path == "/api/note-type":
             try:
                 create_note_type(str(body.get("deck") or "").strip() or "Mining")
-            except AnkiError as e:
-                return self.send(body={"error": str(e)})
+            except AnkiError as e:  # down: no answer at all, versus AnkiConnect refusing
+                return self.send(body={"error": str(e), "down": isinstance(e.__cause__, (OSError, ValueError))})
             self.send(body={**OPTIONS, "model": NOTE_TYPE})
         else:
             self.send(404)
@@ -1102,8 +1130,11 @@ def log_event(msg):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # server.log is UTF-8 whatever the Windows code page
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with ThreadingHTTPServer(("127.0.0.1", PORT), Server) as server:
+    with Http(("127.0.0.1", PORT), Server) as server:
         log_event(f"ani server on http://127.0.0.1:{PORT} (pid {os.getpid()})")
 
         def stop(signum, _frame):  # say why the server went away instead of vanishing

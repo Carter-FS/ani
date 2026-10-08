@@ -384,6 +384,18 @@ assert len(made) == 1 and made[0]["inOrderFields"] == s.NOTE_FIELDS
 assert all(s.OPTIONS[k] in s.NOTE_FIELDS for k in ("sentence", "expression", "picture", "audio"))
 assert s.OPTIONS["deck"] == "Words" and s.load_json(s.OPTIONS_PATH, {})["deck"] == "Words"
 assert s.anki_lists() == {"decks": ["Default", "Mining"], "fields": sorted({"Front", "Back", *s.NOTE_FIELDS})}
+s.invoke = lambda action, **p: ["ani"] if action == "modelNames" else ["Expression"] if action == "modelFieldNames" else None
+try:
+    s.create_note_type("Words")  # an "ani" note type someone pruned: say which fields are gone
+    raise AssertionError("missing fields not reported")
+except s.AnkiError as e:
+    assert "Sentence" in str(e), e
+
+# --- after a stop no new tool starts
+s.STOPPED.set()
+assert s.run(["echo", "hi"]).returncode == -9
+s.STOPPED.clear()
+assert s.run(["echo", "hi"]).stdout == "hi\n"
 
 # --- dropped files are found by name + size and moved into the series
 root = tmpdir()
