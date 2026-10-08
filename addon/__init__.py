@@ -20,7 +20,7 @@ from urllib.parse import quote
 from aqt import gui_hooks, mw
 from aqt.addons import download_addons, show_log_to_user
 from aqt.qt import QAction, QFileDialog
-from aqt.utils import askUser, openLink, showWarning, tooltip
+from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 
 HERE = Path(__file__).parent
 BIN = HERE / "user_files" / "bin"  # user_files survives add-on updates
@@ -107,7 +107,7 @@ def ensure_ankiconnect():
         if askUser("ani needs the AnkiConnect add-on so Yomitan can add cards. Install it now?", title="ani"):
             download_addons(mw, mgr, [ANKICONNECT], lambda log: show_log_to_user(mw, log))
     elif not any(mgr.isEnabled(d) for d in found):
-        showWarning("AnkiConnect is turned off, so Yomitan can't add cards. Turn it on in Tools &gt; Add-ons "
+        showWarning("AnkiConnect is turned off, so Yomitan can't add cards. Turn it on in Tools > Add-ons "
                     "and restart Anki.", title="ani")
 
 
@@ -190,10 +190,25 @@ def add_series():
     openLink(URL + "/?dir=" + quote(folder))
 
 
+def flatpak_note():
+    """Anki from Flathub sees only folders picked in a dialog, so files dropped onto a series can't be
+    found in Downloads. Say once how to give it access."""
+    noted = HERE / "user_files" / "flatpak-noted"
+    if not os.path.exists("/.flatpak-info") or noted.exists() or any(r.is_dir() for r in server.SEARCH_ROOTS):
+        return
+    noted.parent.mkdir(parents=True, exist_ok=True)
+    noted.touch()
+    showInfo("This Anki is the Flathub version, which can't see your Downloads or Videos folders. Adding "
+             "series through Tools &gt; ani works, but files dropped onto a series page won't be found. "
+             "To fix that, run this in a terminal and restart Anki:<br><br>"
+             "<code>flatpak override --user --filesystem=home net.ankiweb.Anki</code>", title="ani", textFormat="rich")
+
+
 def on_profile():
     start_server()
     ensure_ankiconnect()
     ensure_tools()
+    flatpak_note()
 
 
 atexit.register(stop_tools)

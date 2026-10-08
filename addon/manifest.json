@@ -1,1 +1,1 @@
-{"package": "ani", "name": "ani", "min_point_version": 250700, "homepage": "https://github.com/Carter-FS/ani"}
+{"package": "ani", "name": "ani", "min_point_version": 250700, "homepage": "https://github.com/Carter-FS/ani", "conflicts": ["719365920"]}

@@ -375,6 +375,8 @@ def anki_invoke(action, **p):
         return {"Basic": ["Front", "Back"]}.get(p["modelName"], s.NOTE_FIELDS)
     if action == "deckNames":
         return ["Mining", "Default"]
+    if action == "multi":
+        return [{"result": anki_invoke(x["action"], **x["params"]), "error": None} for x in p["actions"]]
 
 
 s.invoke = anki_invoke

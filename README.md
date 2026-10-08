@@ -44,7 +44,7 @@ If you move the clone later, run the `ln` line again from its new location.
 
 No terminal needed. Needs Anki 25.07 or later.
 
-1. In Anki, open Tools > Add-ons > Install from file and pick `ani.ankiaddon`, then restart Anki.
+1. In Anki, open Tools > Add-ons > Get Add-ons, enter code `719365920` ([AnkiWeb page](https://ankiweb.net/shared/info/719365920)), then restart Anki.
 2. Say yes when ani offers to install AnkiConnect, and restart Anki again.
 3. On first start ani downloads ffmpeg and alass (about 80 MB) unless they are already installed. Bundles exist for macOS (Apple Silicon and Intel), Windows x64 and Linux x64.
 4. Use Tools > ani: Add series to pick an episode folder and its subtitle folder, and Tools > ani: Library to open the player.
@@ -52,7 +52,9 @@ No terminal needed. Needs Anki 25.07 or later.
 
 The add-on runs the same server inside Anki, so the player only works while Anki is open. Tools > ani: Stop, or the power button in the player, stops it; Library or Add series starts it again. Its state lives in the add-on's `user_files` folder.
 
-To build it: `addon/build.sh` makes `dist/ani.ankiaddon`, and `addon/tools.sh` makes the tool bundles it downloads (upload them to the `tools-1` release and update the checksums in `addon/__init__.py`).
+Anki from Flathub can't see your files beyond the folders you pick, so files dropped onto a series page aren't found. ani says so once; to fix it, run `flatpak override --user --filesystem=home net.ankiweb.Anki` and restart Anki.
+
+To build it: `addon/build.sh` makes `dist/ani.ankiaddon` (install from file) and `dist/ani-ankiweb.zip` (upload to AnkiWeb); each names the other as a conflict so only one copy runs. `addon/tools.sh` rebuilds the tool bundles from pinned sources; publish a rebuild under a new tag (`tools-2`, ...) and update `RELEASE` and the checksums in `addon/__init__.py`, never re-upload to a published tag.
 
 ## Anki setup
 

@@ -723,7 +723,10 @@ def save_options():
 
 def anki_lists():
     """Deck and field names for the settings form's suggestions."""
-    fields = {f for m in invoke("modelNames") or [] for f in invoke("modelFieldNames", modelName=m) or []}
+    # one round trip for every note type's fields: each AnkiConnect call waits on Anki's main thread
+    replies = invoke("multi", actions=[{"action": "modelFieldNames", "version": 6, "params": {"modelName": m}}
+                                       for m in invoke("modelNames") or []])
+    fields = {f for r in replies or [] if isinstance(r, dict) for f in r.get("result") or []}
     return {"decks": sorted(invoke("deckNames") or []), "fields": sorted(fields)}
 
 
