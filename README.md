@@ -55,30 +55,14 @@ Your video and subtitle files are never changed; synced subtitles are saved besi
 - **Wrong audio language:** the browser plays the first audio track it can decode, so on dual-audio releases put the Japanese track first.
 - **Cards not filled:** only cards added today, whose sentence matches a line already played and whose picture and audio fields are empty, are filled. With your own note type, map its sentence field to `{sentence}` in Yomitan and enter the deck and field names in ani's settings.
 
-## Command line
+### Settings outside the app
 
-For power users, ani also runs without Anki's add-on, as a command. It needs Python 3.10+, ffmpeg, [alass](https://github.com/kaegi/alass) and Anki with [AnkiConnect](https://ankiweb.net/shared/info/2055492159).
-
-```sh
-brew install python ffmpeg alass             # macOS
-sudo pacman -S python ffmpeg && yay -S alass # Arch Linux
-
-git clone https://github.com/Carter-FS/ani.git
-ln -sf "$PWD/ani/ani" ~/.local/bin/ani       # any directory on PATH; rerun if you move the clone
-
-ani <video> [subtitles]    # subtitles (a file or folder) on first play only
-ani <folder> [subtitles]   # open a series in the library
-ani                        # continue where you left off
-ani --resync <video>       # sync the subtitle again
-ani --stop                 # stop the background server
-```
+Set these as environment variables for Anki if the defaults don't suit:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ANI_BROWSER` | system default | Browser to open; macOS app name or Linux command name |
-| `ANI_PORT` | `6969` | Server port |
-| `ANI_SEARCH` | Downloads, Desktop, Movies, Videos | Folders searched for dropped files (`:`-separated, `;` on Windows) |
-| `ANI_STATE` | `$XDG_STATE_HOME/ani` | State, settings, thumbnails and the server log; the add-on uses its `user_files` folder |
+| `ANI_PORT` | `6969` | Port the player is served on |
+| `ANI_SEARCH` | Downloads, Desktop, Movies, Videos | Folders searched for files dropped onto a series (`:`-separated, `;` on Windows) |
 | `ANKICONNECT` | `http://127.0.0.1:8765` | AnkiConnect URL |
 
 ## Development

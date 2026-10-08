@@ -25,8 +25,8 @@ from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 HERE = Path(__file__).parent
 BIN = HERE / "user_files" / "bin"  # user_files survives add-on updates
 STATE = Path(os.environ.setdefault("ANI_STATE", str(HERE / "user_files")))
-# The ani command keeps its library in its own state folder; on the add-on's first start, bring it
-# along so switching to the add-on doesn't empty the library.
+# ani used to be a command with its library in its own state folder; on the add-on's first start,
+# bring that library along so switching to the add-on doesn't empty it.
 CLI_STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ani"
 if not (STATE / "state.json").exists() and CLI_STATE.resolve() != STATE.resolve():
     for name in ("state.json", "options.json"):
@@ -140,7 +140,7 @@ def start_server():
     server.STOPPED.clear()
     try:
         httpd = server.Http(("127.0.0.1", server.PORT), server.Server)
-    except OSError:  # the port is taken: fine if it's the ani command's own server
+    except OSError:  # the port is taken: fine if ani already answers there (another Anki window)
         if running():
             return True
         showWarning(f"Another program is using port {server.PORT}, so ani can't start. Close it, or set the "

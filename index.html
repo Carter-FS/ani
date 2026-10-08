@@ -267,7 +267,7 @@ $('#stop').onclick = async () => {
   $('#player').hidden = true;
   $('#dot').classList.remove('on');
   $('#library').hidden = false;
-  $('#library').innerHTML = '<h1>ani has stopped</h1><p class="empty">To start it again, use <b>Tools &gt; ani: Library</b> in Anki, or run <code>ani</code> in a terminal.</p>';
+  $('#library').innerHTML = '<h1>ani has stopped</h1><p class="empty">To start it again, use <b>Tools &gt; ani: Library</b> in Anki.</p>';
 };
 form.onsubmit = () => {
   const o = Object.fromEntries(new FormData(form));
