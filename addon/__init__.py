@@ -35,9 +35,10 @@ URL = f"http://127.0.0.1:{server.PORT}"
 ANKICONNECT = 2055492159
 RELEASE = "https://github.com/Carter-FS/ani/releases/download/tools-1/"
 BUNDLES = {  # (sys.platform, machine) -> (file, sha256); built by addon/tools.sh
-    ("darwin", "arm64"): ("ani-tools-mac-arm64.zip", "453ff55aebeb34106b993bb5bf5fdd3d7afe24be37b14a02150c4245fca8016b"),
-    ("win32", "AMD64"): ("ani-tools-win64.zip", "f26537625962fe106a48b0147181da6ea2858bfd7c50f70823fd268eac3f17fa"),
-    ("linux", "x86_64"): ("ani-tools-linux64.zip", "5b1172e228714ca580c109bdbdd54b8fe7156b8b8484919a86bc19c21946b81d"),
+    ("darwin", "arm64"): ("ani-tools-mac-arm64.zip", "8498aaaf5d3dea4e1f5b6ace8e01c131ee3b60053c25225233368266d868596a"),
+    ("darwin", "x86_64"): ("ani-tools-mac-x64.zip", "9bc7f0d9812dfd75ff3279531076820b346ae9aac100dcd82da90b70304182ec"),
+    ("win32", "AMD64"): ("ani-tools-win64.zip", "e460fd0f750cb37a22163d489f11d15d52ffb87a4741bd62bce14bf3651ecc25"),
+    ("linux", "x86_64"): ("ani-tools-linux64.zip", "fad36621ec4a971a3716a7c767c4ffa43e5055b15abd4e0f11baaa967a2cf363"),
 }
 
 
@@ -58,16 +59,20 @@ def fetch_tools(name, sha):
         f.chmod(0o755)  # zip drops the executable bit
 
 
+FETCHING = threading.Event()  # a profile switch mid-download mustn't start a second one
+
+
 def ensure_tools():
-    if not tools_missing():
+    if not tools_missing() or FETCHING.is_set():
         return
     bundle = BUNDLES.get((sys.platform, platform.machine()))
     if not bundle:
-        return showWarning("ani needs ffmpeg and alass. Install them (on a Mac: <code>brew install ffmpeg alass</code>) "
-                           "and restart Anki.", title="ani")
+        return showWarning("ani needs ffmpeg and alass. Install them and restart Anki.", title="ani")
+    FETCHING.set()
     tooltip("ani: downloading ffmpeg and alass, about 80 MB. This happens once.", period=8000)
 
     def done(fut):
+        FETCHING.clear()
         try:
             fut.result()
             tooltip("ani is ready: Tools &gt; ani: Library")
@@ -85,25 +90,49 @@ def ensure_ankiconnect():
         download_addons(mw, mw.addonManager, [ANKICONNECT], lambda log: show_log_to_user(mw, log))
 
 
+HTTPD = None
+
+
 def start_server():
+    """Start the server unless it is running; it also stops from the page's stop button."""
+    global HTTPD
+    if HTTPD:
+        return
     try:
-        httpd = server.ThreadingHTTPServer(("127.0.0.1", server.PORT), server.Server)
+        HTTPD = server.ThreadingHTTPServer(("127.0.0.1", server.PORT), server.Server)
     except OSError:  # most likely the ani command's own server, which works just as well
         return
-    threading.Thread(target=httpd.serve_forever, daemon=True, name="ani").start()
-    atexit.register(stop_tools)
+    threading.Thread(target=serve, args=(HTTPD,), daemon=True, name="ani").start()
 
 
-def stop_tools():  # syncs still running when Anki quits
+def serve(httpd):
+    global HTTPD
+    with httpd:
+        httpd.serve_forever()  # returns after /quit
+    HTTPD = None
+    stop_tools()
+
+
+def stop_tools():  # syncs still running when ani stops or Anki quits
     for p in list(server.CHILDREN):
         server.kill_group(p)
 
 
+def stop():
+    try:
+        urllib.request.urlopen(urllib.request.Request(URL + "/quit", b"{}"), timeout=5).close()
+        tooltip("ani stopped")
+    except OSError:
+        tooltip("ani isn't running")
+
+
 def library():
+    start_server()
     openLink(URL + "/?continue")
 
 
 def add_series():
+    start_server()
     folder = QFileDialog.getExistingDirectory(mw, "ani: choose the folder with the episodes")
     if not folder:
         return
@@ -112,7 +141,7 @@ def add_series():
     folder = str(Path(folder).resolve())  # the same spelling the server stores
     body = {"dir": folder, **({"subs": str(Path(subs).resolve())} if subs else {})}
     try:
-        urllib.request.urlopen(urllib.request.Request(URL + "/register", json.dumps(body).encode()), timeout=10)
+        urllib.request.urlopen(urllib.request.Request(URL + "/register", json.dumps(body).encode()), timeout=10).close()
     except urllib.error.HTTPError as e:
         return showWarning(f"ani couldn't add that folder: {json.load(e).get('error', e)}", title="ani")
     except OSError as e:
@@ -126,7 +155,8 @@ def on_profile():
 
 
 start_server()
-for text, fn in (("ani: Library", library), ("ani: Add series...", add_series)):
+atexit.register(stop_tools)
+for text, fn in (("ani: Library", library), ("ani: Add series...", add_series), ("ani: Stop", stop)):
     action = QAction(text, mw)
     action.triggered.connect(fn)
     mw.form.menuTools.addAction(action)

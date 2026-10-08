@@ -113,6 +113,10 @@
     #settings label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.8rem; }
     #settings input { font: inherit; font-family: ui-monospace, monospace; background: var(--bg); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; }
     #settings .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+    #settings .note { color: var(--muted); font-size: 0.85rem; margin: -0.5rem 0 1rem; line-height: 1.5; }
+    #settings .note code { font-size: 0.8rem; }
+    #settings .note ul { margin: 0.3rem 0; padding-left: 1.2rem; }
+    #make-type { width: 100%; justify-content: center; margin-bottom: 0.8rem; }
     #settings .save { width: 100%; border: 0; border-radius: 10px; background: var(--accent); color: white; padding: 0.6rem; font-weight: 600; margin-top: 0.5rem; }
 
     @media (max-width: 800px) {
@@ -129,6 +133,9 @@
     <span class="dot" id="dot" title="Server connection"></span>
     <button class="icon" id="theme" title="Toggle theme" aria-label="Toggle theme">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>
+    </button>
+    <button class="icon" id="stop" title="Stop ani" aria-label="Stop ani">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><path d="M12 2v10"/></svg>
     </button>
     <button class="icon" id="open-settings" title="Anki settings" aria-label="Anki settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -171,16 +178,20 @@
   <dialog id="settings">
     <form method="dialog" id="settings-form">
       <h3>Anki</h3>
-      <label>Deck <input name="deck" autocomplete="off" placeholder="Mining"></label>
+      <p class="note" id="anki-status"></p>
+      <label>Deck <input name="deck" list="decks" autocomplete="off" placeholder="Mining"></label>
+      <button type="button" class="ghost" id="make-type" title="Creates the deck too">Create the ani note type for this deck</button>
+      <p class="note" id="yomitan" hidden></p>
       <div class="row">
-        <label>Sentence field <input name="sentence" autocomplete="off"></label>
-        <label>Expression field <input name="expression" autocomplete="off"></label>
-        <label>Picture field <input name="picture" autocomplete="off"></label>
-        <label>Sentence audio field <input name="audio" autocomplete="off"></label>
+        <label>Sentence field <input name="sentence" list="fields" autocomplete="off"></label>
+        <label>Expression field <input name="expression" list="fields" autocomplete="off"></label>
+        <label>Picture field <input name="picture" list="fields" autocomplete="off"></label>
+        <label>Sentence audio field <input name="audio" list="fields" autocomplete="off"></label>
         <label>Lines before <input name="prev_lines" type="number" min="0"></label>
         <label>Lines after <input name="next_lines" type="number" min="0"></label>
       </div>
       <button class="save">Save</button>
+      <datalist id="decks"></datalist><datalist id="fields"></datalist>
     </form>
   </dialog>
 
@@ -215,10 +226,40 @@ $('#theme').onclick = () => {
 
 /* settings */
 const form = $('#settings-form');
+const fill = (opts) => { for (const [k, v] of Object.entries(opts)) if (form.elements[k]) form.elements[k].value = String(v).replace(/^"|"$/g, ''); };
+const options = (list) => list.map((v) => `<option value="${escAttr(v)}">`).join('');
+const ankiDown = 'Anki isn\'t reachable. Open Anki and make sure the AnkiConnect add-on is installed.';
 $('#open-settings').onclick = async () => {
-  const opts = await api('/options');
-  for (const [k, v] of Object.entries(opts)) if (form.elements[k]) form.elements[k].value = String(v).replace(/^"|"$/g, '');
+  fill(await api('/options'));
+  $('#yomitan').hidden = true;
+  $('#anki-status').textContent = 'Connecting to Anki...';
   $('#settings').showModal();
+  const a = await api('/api/anki').catch(() => ({ error: true }));
+  $('#anki-status').textContent = a.error ? ankiDown : 'Connected to Anki. Pick a deck, or type a new name and create the note type.';
+  if (!a.error) { $('#decks').innerHTML = options(a.decks); $('#fields').innerHTML = options(a.fields); }
+};
+$('#make-type').onclick = async () => {
+  const r = await api('/api/note-type', { deck: form.elements.deck.value }).catch(() => ({ error: true }));
+  if (r.error) return $('#anki-status').textContent = ankiDown;
+  fill(r);
+  $('#anki-status').textContent = `Done: deck "${r.deck}" with note type "${r.model}". These settings are saved.`;
+  $('#yomitan').innerHTML = `Last step, in Yomitan's settings under Anki &gt; Configure Anki card format: pick deck <b>${escName(r.deck)}</b> and model <b>${r.model}</b>, then fill in
+    <ul><li>Expression: <code>{expression}</code></li><li>Reading: <code>{reading}</code></li><li>Meaning: <code>{glossary}</code></li>
+    <li>Sentence: <code>{sentence}</code></li><li>WordAudio: <code>{audio}</code></li></ul>Leave Picture and SentenceAudio empty: ani fills them.`;
+  $('#yomitan').hidden = false;
+};
+
+/* stop */
+$('#stop').onclick = async () => {
+  if (!confirm('Stop ani? Background subtitle syncing stops too.')) return;
+  await api('/quit', {}).catch(() => {});
+  video.pause();
+  P.path = null;  // ends the heartbeat and card checks
+  clearTimeout(libTimer);
+  $('#player').hidden = true;
+  $('#dot').classList.remove('on');
+  $('#library').hidden = false;
+  $('#library').innerHTML = '<h1>ani has stopped</h1><p class="empty">To start it again, use <b>Tools &gt; ani: Library</b> in Anki, or run <code>ani</code> in a terminal.</p>';
 };
 form.onsubmit = () => {
   const o = Object.fromEntries(new FormData(form));

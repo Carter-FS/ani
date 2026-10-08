@@ -16,15 +16,22 @@ bundle() {  # bundle <name> <dir>: zip a flat folder of tools
     (cd "$2" && zip -q -X "$OLDPWD/dist/ani-tools-$1.zip" ./*)
 }
 
-# macOS arm64
-d="$work/mac-arm64"; mkdir -p "$d"
-for t in ffmpeg ffprobe; do
-    curl -fsSL --retry 5 -o "$work/$t.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/$t.zip"
-    unzip -q -o "$work/$t.zip" -d "$d"
+# macOS, Apple Silicon and Intel (needs: rustup target add x86_64-apple-darwin)
+export CFLAGS_x86_64_apple_darwin="-arch x86_64"  # else alass's bundled C code builds for the host arch
+for arch in arm64:arm64:aarch64 x64:amd64:x86_64; do  # bundle name : ffmpeg build : Rust target
+    IFS=: read -r name ff rust <<EOT
+$arch
+EOT
+    d="$work/mac-$name"; mkdir -p "$d"
+    for t in ffmpeg ffprobe; do  # the redirect 404s now and then, so retry on any error
+        curl -fsSL --retry 5 --retry-all-errors -o "$work/$t.zip" \
+            "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$ff/release/$t.zip"
+        unzip -q -o "$work/$t.zip" -d "$d"
+    done
+    cargo install alass-cli --locked --target "$rust-apple-darwin" --root "$work/alass-$name" -q
+    cp "$work/alass-$name/bin/alass-cli" "$d/"
+    bundle "mac-$name" "$d"
 done
-cargo install alass-cli --locked --root "$work/alass" -q
-cp "$work/alass/bin/alass-cli" "$d/"
-bundle mac-arm64 "$d"
 
 # Windows x64
 d="$work/win64"; mkdir -p "$d"

@@ -46,18 +46,23 @@ No terminal needed. Needs Anki 25.07 or later.
 
 1. In Anki, open Tools > Add-ons > Install from file and pick `ani.ankiaddon`, then restart Anki.
 2. Say yes when ani offers to install AnkiConnect, and restart Anki again.
-3. On first start ani downloads ffmpeg and alass (about 80 MB) unless they are already installed.
+3. On first start ani downloads ffmpeg and alass (about 80 MB) unless they are already installed. Bundles exist for macOS (Apple Silicon and Intel), Windows x64 and Linux x64.
 4. Use Tools > ani: Add series to pick an episode folder and its subtitle folder, and Tools > ani: Library to open the player.
+5. Follow [Anki setup](#anki-setup).
 
-The add-on runs the same server inside Anki, so the player only works while Anki is open. Its state lives in the add-on's `user_files` folder.
+The add-on runs the same server inside Anki, so the player only works while Anki is open. Tools > ani: Stop, or the power button in the player, stops it; Library or Add series starts it again. Its state lives in the add-on's `user_files` folder.
 
 To build it: `addon/build.sh` makes `dist/ani.ankiaddon`, and `addon/tools.sh` makes the tool bundles it downloads (upload them to the `tools-1` release and update the checksums in `addon/__init__.py`).
 
 ## Anki setup
 
+The quick way: open ani, click the settings icon, type a deck name and click **Create the ani note type for this deck**. That creates the deck and an `ani` note type, fills in the settings, and lists what to enter in Yomitan.
+
+To use your own note type instead:
+
 1. Pick a mining deck and note type. The note type needs fields for the sentence, the target word, a picture and the sentence audio. The picture and sentence audio fields must be ones Yomitan leaves empty.
 2. In Yomitan's Anki settings, map the sentence field to `{sentence}`.
-3. Open ani, click the settings icon, and enter the deck and field names.
+3. Open ani, click the settings icon, and enter the deck and field names. With Anki open, the inputs suggest your decks and fields.
 
 Cards are matched by their sentence against subtitle lines already played. Only cards added today with empty picture and audio fields are filled in.
 

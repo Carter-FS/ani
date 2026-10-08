@@ -361,6 +361,30 @@ assert filled == [(20, 1)], filled  # note 10 (empty sentence) untouched; note 2
 s.check(0.5)  # nothing played yet: no new fills
 assert filled == [(20, 1)]
 
+# --- "Create note type": made once, reused after, and the options point at it
+models, made = ["Basic"], []
+
+
+def anki_invoke(action, **p):
+    if action == "modelNames":
+        return list(models)
+    if action == "createModel":
+        models.append(p["modelName"])
+        made.append(p)
+    if action == "modelFieldNames":
+        return {"Basic": ["Front", "Back"]}.get(p["modelName"], s.NOTE_FIELDS)
+    if action == "deckNames":
+        return ["Mining", "Default"]
+
+
+s.invoke = anki_invoke
+s.create_note_type("Words")
+s.create_note_type("Words")
+assert len(made) == 1 and made[0]["inOrderFields"] == s.NOTE_FIELDS
+assert all(s.OPTIONS[k] in s.NOTE_FIELDS for k in ("sentence", "expression", "picture", "audio"))
+assert s.OPTIONS["deck"] == "Words" and s.load_json(s.OPTIONS_PATH, {})["deck"] == "Words"
+assert s.anki_lists() == {"decks": ["Default", "Mining"], "fields": sorted({"Front", "Back", *s.NOTE_FIELDS})}
+
 # --- dropped files are found by name + size and moved into the series
 root = tmpdir()
 (root / "dl" / "nested").mkdir(parents=True)

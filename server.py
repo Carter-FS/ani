@@ -686,8 +686,41 @@ OPTIONS = {"deck": "", "sentence": "Sentence", "expression": "Expression",
 OPTIONS.update(load_json(OPTIONS_PATH, {}))
 
 
+NOTE_TYPE = "ani"  # the note type "Create note type" makes; its field names are OPTIONS' defaults
+NOTE_FIELDS = ["Expression", "Reading", "Meaning", "Sentence", "Picture", "SentenceAudio", "WordAudio"]
+NOTE_FRONT = '<div class="sentence">{{Sentence}}</div><div class="word">{{Expression}}</div>'
+NOTE_BACK = ('{{FrontSide}}<hr id="answer"><div class="reading">{{Reading}}</div>{{Picture}}'
+             '<div class="meaning">{{Meaning}}</div>{{SentenceAudio}} {{WordAudio}}')
+NOTE_CSS = (".card { font-family: sans-serif; font-size: 22px; text-align: center; }\n"
+            ".sentence { font-size: 28px; } .sentence b { color: #e0632b; }\n"
+            ".word { font-size: 18px; opacity: 0.7; margin-top: 0.5em; }\n"
+            ".meaning { font-size: 18px; text-align: left; } img { max-width: 100%; }")
+
+
 class AnkiError(Exception):
     pass
+
+
+def save_options():
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    OPTIONS_PATH.write_text(json.dumps(OPTIONS, ensure_ascii=False), encoding="utf-8")
+
+
+def anki_lists():
+    """Deck and field names for the settings form's suggestions."""
+    models = invoke("modelNames")
+    fields = {f for m in models for f in invoke("modelFieldNames", modelName=m)}
+    return {"decks": sorted(invoke("deckNames")), "fields": sorted(fields)}
+
+
+def create_note_type(deck):
+    """Make the deck and the ani note type (unless they exist) and point the options at them."""
+    invoke("createDeck", deck=deck)
+    if NOTE_TYPE not in invoke("modelNames"):
+        invoke("createModel", modelName=NOTE_TYPE, inOrderFields=NOTE_FIELDS, css=NOTE_CSS,
+               cardTemplates=[{"Name": "Mining", "Front": NOTE_FRONT, "Back": NOTE_BACK}])
+    OPTIONS.update(deck=deck, sentence="Sentence", expression="Expression", picture="Picture", audio="SentenceAudio")
+    save_options()
 
 
 def token():
@@ -933,6 +966,11 @@ class Server(BaseHTTPRequestHandler):
             self.send_file(t, "image/jpeg")
         elif url.path == "/options":
             self.send(body=OPTIONS)
+        elif url.path == "/api/anki":
+            try:
+                self.send(body=anki_lists())
+            except AnkiError as e:
+                self.send(body={"error": str(e)})
         else:
             self.send(404)
 
@@ -1039,14 +1077,19 @@ class Server(BaseHTTPRequestHandler):
                     save_state()
             self.send(body={})
         elif path == "/quit":
-            log_event("stopping: quit requested (ani --stop)")
+            log_event("stopping: quit requested")
             self.send(body={})
             threading.Thread(target=self.server.shutdown).start()
         elif path == "/options":
             OPTIONS.update({k: body[k] for k in OPTIONS if k in body})
-            STATE_DIR.mkdir(parents=True, exist_ok=True)
-            OPTIONS_PATH.write_text(json.dumps(OPTIONS, ensure_ascii=False), encoding="utf-8")
+            save_options()
             self.send(body=OPTIONS)
+        elif path == "/api/note-type":
+            try:
+                create_note_type(str(body.get("deck") or "").strip() or "Mining")
+            except AnkiError as e:
+                return self.send(body={"error": str(e)})
+            self.send(body={**OPTIONS, "model": NOTE_TYPE})
         else:
             self.send(404)
 
