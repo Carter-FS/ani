@@ -2,7 +2,7 @@
 
 Watch local anime in the browser with Yomitan-scannable subtitles and one-click Anki cards. Adding a card with Yomitan automatically fills in the subtitle sentence, a screenshot and the sentence audio.
 
-Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, reworked to run in the browser on macOS and Linux.
+Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, reworked to run in the browser on Windows, macOS and Linux.
 
 <img width="1409" height="813" alt="ani playing an episode with subtitles over the video" src="https://github.com/user-attachments/assets/fc04f900-f5ad-406b-93d4-88c25efc305d" />
 
@@ -11,81 +11,32 @@ Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, r
 ## Features
 
 - Subtitles drawn over the video as text, so Yomitan can scan them
-- Card fields filled through AnkiConnect: sentence, screenshot (JPEG) and sentence audio (MP3)
-- Subtitles synced with [alass](https://github.com/kaegi/alass) on first play, to the release's own embedded subtitles when they fit, else to the Japanese audio track; the rest of the season syncs in the background
+- Cards get the sentence, a screenshot and the sentence audio automatically
+- Subtitles synced to the episode automatically, the rest of the season in the background
 - Library with thumbnails and watch progress; resumes where you left off
-- Drag and drop episodes or subtitles onto a series to move them in and sync them
 - Spoiler-free transcript, pause on hovering the subtitle, line-by-line navigation
-
-## Requirements
-
-- Python 3.10+, ffmpeg, alass
-- Anki with [AnkiConnect](https://ankiweb.net/shared/info/2055492159)
-- A browser with [Yomitan](https://yomitan.wiki/) that can decode your video files. HEVC (x265) works in Firefox 137+ and in Chromium-based browsers on macOS; on Linux it needs hardware decoding (VA-API).
 
 ## Install
 
-```sh
-# macOS
-brew install python ffmpeg alass
+You need [Anki](https://apps.ankiweb.net/) 25.07 or later and a browser with [Yomitan](https://yomitan.wiki/).
 
-# Arch Linux
-sudo pacman -S python ffmpeg
-yay -S alass
+1. In Anki, open Tools > Add-ons > Get Add-ons, enter `719365920` and restart Anki.
+2. Say yes when ani offers to install AnkiConnect, then restart Anki again. On first start ani also downloads the tools it needs (about 80 MB).
+3. Open Tools > ani: Library, click the settings icon, type a deck name and click **Create the ani note type for this deck**. Then copy the field list it shows into Yomitan's Anki settings.
 
-git clone https://github.com/Carter-FS/ani.git
-cd ani
-ln -sf "$PWD/ani" ~/.local/bin/ani   # any directory on PATH
-```
+On Anki from Flathub, also run `flatpak override --user --filesystem=home net.ankiweb.Anki` so ani can find files you drop onto a series.
 
-If you move the clone later, run the `ln` line again from its new location.
+## Use
 
-### As an Anki add-on
+- **Tools > ani: Add series** picks a folder of episodes and, if they're elsewhere, a folder of Japanese subtitles. Episodes are matched to subtitles by number (`S01E03`, `- 03`, `第3話`).
+- **Tools > ani: Library** opens the player. Anki must stay open while you watch.
+- Add a card with Yomitan as usual; ani fills in the picture and audio within a few seconds.
+- To add episodes later, drop them onto the series page.
+- **Tools > ani: Stop**, or the power button in the player, stops ani.
 
-No terminal needed. Needs Anki 25.07 or later.
+Your video and subtitle files are never changed; synced subtitles are saved beside each video as `<video>.ani.srt`.
 
-1. In Anki, open Tools > Add-ons > Get Add-ons, enter code `719365920` ([AnkiWeb page](https://ankiweb.net/shared/info/719365920)), then restart Anki.
-2. Say yes when ani offers to install AnkiConnect, and restart Anki again.
-3. On first start ani downloads ffmpeg and alass (about 80 MB) unless they are already installed. Bundles exist for macOS (Apple Silicon and Intel), Windows x64 and Linux x64.
-4. Use Tools > ani: Add series to pick an episode folder and its subtitle folder, and Tools > ani: Library to open the player.
-5. Follow [Anki setup](#anki-setup).
-
-The add-on runs the same server inside Anki, so the player only works while Anki is open. Tools > ani: Stop, or the power button in the player, stops it; Library or Add series starts it again. Its state lives in the add-on's `user_files` folder.
-
-Anki from Flathub can't see your files beyond the folders you pick, so files dropped onto a series page aren't found. ani says so once; to fix it, run `flatpak override --user --filesystem=home net.ankiweb.Anki` and restart Anki.
-
-To build it: `addon/build.sh` makes `dist/ani.ankiaddon` (install from file) and `dist/ani-ankiweb.zip` (upload to AnkiWeb); each names the other as a conflict so only one copy runs. `addon/tools.sh` rebuilds the tool bundles from pinned sources; publish a rebuild under a new tag (`tools-2`, ...) and update `RELEASE` and the checksums in `addon/__init__.py`, never re-upload to a published tag.
-
-## Anki setup
-
-The quick way: open ani, click the settings icon, type a deck name and click **Create the ani note type for this deck**. That creates the deck and an `ani` note type, fills in the settings, and lists what to enter in Yomitan.
-
-To use your own note type instead:
-
-1. Pick a mining deck and note type. The note type needs fields for the sentence, the target word, a picture and the sentence audio. The picture and sentence audio fields must be ones Yomitan leaves empty.
-2. In Yomitan's Anki settings, map the sentence field to `{sentence}`.
-3. Open ani, click the settings icon, and enter the deck and field names. With Anki open, the inputs suggest your decks and fields.
-
-Cards are matched by their sentence against subtitle lines already played. Only cards added today with empty picture and audio fields are filled in.
-
-## Usage
-
-```sh
-ani <video> <subtitles>    # first play; subtitles is a file or a folder
-ani <video>                # later plays
-ani <folder> [subtitles]   # open a series in the library
-ani                        # continue where you left off
-ani --resync <video>       # sync the subtitle again
-ani --stop                 # stop the background server
-```
-
-With a subtitle folder, each video is matched to a subtitle by episode number (`S01E03`, `- 03`, `第3話`). Synced subtitles are saved next to each video as `<video>.ani.srt` (or `.ani.ass`); files you provide are never modified. Files still being written are synced once unchanged for a minute.
-
-The browser plays the first audio track it can decode, so put the Japanese track first on dual-audio releases. A track the browser can't decode is skipped, which happened with FLAC in MKV under Zen (Firefox-based).
-
-To add episodes from the browser, drop files onto a series page or use **Add episodes**. Browsers do not expose file paths, so the server finds each file by name and size in the `ANI_SEARCH` folders and moves it into the series. Subtitles go to the series' subtitle folder.
-
-## Keys
+### Keys
 
 | Key | Action |
 | --- | --- |
@@ -98,21 +49,43 @@ To add episodes from the browser, drop files onto a series page or use **Add epi
 | H | Toggle hover pause |
 | L | Library |
 
-## Configuration
+### Troubleshooting
+
+- **No picture or sound:** the browser can't decode the file. HEVC (x265) works in Firefox 137+ and in Chromium-based browsers on macOS; on Linux it needs hardware decoding (VA-API).
+- **Wrong audio language:** the browser plays the first audio track it can decode, so on dual-audio releases put the Japanese track first.
+- **Cards not filled:** only cards added today, whose sentence matches a line already played and whose picture and audio fields are empty, are filled. With your own note type, map its sentence field to `{sentence}` in Yomitan and enter the deck and field names in ani's settings.
+
+## Command line
+
+For power users, ani also runs without Anki's add-on, as a command. It needs Python 3.10+, ffmpeg, [alass](https://github.com/kaegi/alass) and Anki with [AnkiConnect](https://ankiweb.net/shared/info/2055492159).
+
+```sh
+brew install python ffmpeg alass             # macOS
+sudo pacman -S python ffmpeg && yay -S alass # Arch Linux
+
+git clone https://github.com/Carter-FS/ani.git
+ln -sf "$PWD/ani/ani" ~/.local/bin/ani       # any directory on PATH; rerun if you move the clone
+
+ani <video> [subtitles]    # subtitles (a file or folder) on first play only
+ani <folder> [subtitles]   # open a series in the library
+ani                        # continue where you left off
+ani --resync <video>       # sync the subtitle again
+ani --stop                 # stop the background server
+```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ANI_BROWSER` | system default | Browser to open; macOS app name or Linux command name |
 | `ANI_PORT` | `6969` | Server port |
-| `ANI_SEARCH` | `~/Downloads:~/Desktop:~/Movies:~/Videos` | Folders searched for dropped files |
-| `ANI_STATE` | `$XDG_STATE_HOME/ani` | State, settings, thumbnails and the server log |
+| `ANI_SEARCH` | Downloads, Desktop, Movies, Videos | Folders searched for dropped files (`:`-separated, `;` on Windows) |
+| `ANI_STATE` | `$XDG_STATE_HOME/ani` | State, settings, thumbnails and the server log; the add-on uses its `user_files` folder |
 | `ANKICONNECT` | `http://127.0.0.1:8765` | AnkiConnect URL |
 
 ## Development
 
-```sh
-python3 test_ani.py
-```
+- `python3 test_ani.py` runs the tests.
+- `addon/build.sh` makes `dist/ani.ankiaddon` (install from file) and `dist/ani-ankiweb.zip` (upload to AnkiWeb). Each names the other as a conflict so only one copy runs.
+- `addon/tools.sh` rebuilds the tool bundles the add-on downloads, from pinned sources. Publish a rebuild under a new release tag (`tools-2`, ...) and update `RELEASE` and the checksums in `addon/__init__.py`; never re-upload to a published tag.
 
 ## Licence
 
