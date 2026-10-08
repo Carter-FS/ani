@@ -4,7 +4,9 @@ Watch local anime in the browser with Yomitan-scannable subtitles and one-click 
 
 Based on [Autocards](https://learnjapanese.moe/autocards/) by かにふぁん, reworked to run in the browser on macOS and Linux.
 
-<img width="1409" height="813" alt="image" src="https://github.com/user-attachments/assets/fc04f900-f5ad-406b-93d4-88c25efc305d" />
+<img width="1409" height="813" alt="ani playing an episode with subtitles over the video" src="https://github.com/user-attachments/assets/fc04f900-f5ad-406b-93d4-88c25efc305d" />
+
+**Status:** Active
 
 ## Features
 
@@ -31,7 +33,7 @@ brew install python ffmpeg alass
 sudo pacman -S python ffmpeg
 yay -S alass
 
-git clone <repo-url> ani
+git clone https://github.com/Carter-FS/ani.git
 cd ani
 ln -sf "$PWD/ani" ~/.local/bin/ani   # any directory on PATH
 ```
