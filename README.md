@@ -40,6 +40,19 @@ ln -sf "$PWD/ani" ~/.local/bin/ani   # any directory on PATH
 
 If you move the clone later, run the `ln` line again from its new location.
 
+### As an Anki add-on
+
+No terminal needed. Needs Anki 25.07 or later.
+
+1. In Anki, open Tools > Add-ons > Install from file and pick `ani.ankiaddon`, then restart Anki.
+2. Say yes when ani offers to install AnkiConnect, and restart Anki again.
+3. On first start ani downloads ffmpeg and alass (about 80 MB) unless they are already installed.
+4. Use Tools > ani: Add series to pick an episode folder and its subtitle folder, and Tools > ani: Library to open the player.
+
+The add-on runs the same server inside Anki, so the player only works while Anki is open. Its state lives in the add-on's `user_files` folder.
+
+To build it: `addon/build.sh` makes `dist/ani.ankiaddon`, and `addon/tools.sh` makes the tool bundles it downloads (upload them to the `tools-1` release and update the checksums in `addon/__init__.py`).
+
 ## Anki setup
 
 1. Pick a mining deck and note type. The note type needs fields for the sentence, the target word, a picture and the sentence audio. The picture and sentence audio fields must be ones Yomitan leaves empty.

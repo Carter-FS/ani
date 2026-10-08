@@ -240,10 +240,10 @@ async function showLibrary(dir) {
   $('#crumb').textContent = data.name || '';
   LIB = data.dir || null;
   if (!data.dir) {
-    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${escAttr(s)}">${escName(s.split('/').pop())}</option>`).join('')}</select></p>` : '';
+    const pick = data.series.length ? `<p class="sub"><select id="series"><option>Open a series</option>${data.series.map((s) => `<option value="${escAttr(s)}">${escName(s.split(/[\\/]/).pop())}</option>`).join('')}</select></p>` : '';
     lib.innerHTML = data.missing
       ? `<h1>Library</h1><p class="empty">Folder not found: <code>${escName(data.missing)}</code>. It may have been moved or unmounted.</p>${pick}`
-      : `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal.</p>${pick}`;
+      : `<h1>Library</h1><p class="empty">No series yet. Run <code>ani &lt;folder&gt; &lt;subtitle folder&gt;</code> or <code>ani &lt;video&gt; &lt;subtitles&gt;</code> in a terminal, or in Anki use <b>Tools &gt; ani: Add series</b>.</p>${pick}`;
     $('#series')?.addEventListener('change', (ev) => location.href = '/?dir=' + encodeURIComponent(ev.target.value));
     return;
   }
@@ -252,7 +252,7 @@ async function showLibrary(dir) {
   lib.innerHTML = `
     <h1>${escName(data.name)}</h1>
     <p class="sub">${data.episodes.length} episodes &middot; ${watched} watched
-      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${escName(s.split('/').pop())}</option>`).join('')}</select>` : ''}</p>
+      ${others.length ? `&middot; <select id="series"><option>Switch series</option>${others.map((s) => `<option value="${escAttr(s)}">${escName(s.split(/[\\/]/).pop())}</option>`).join('')}</select>` : ''}</p>
     <div class="actions">
       ${data.continue ? `<button class="continue" id="continue">&#9654; Continue: ${epLabel(data.episodes.find((e) => e.path === data.continue) || {})}</button>` : ''}
       <button class="ghost" id="add" title="Or drop files anywhere on this page">+ Add episodes</button>
@@ -315,7 +315,7 @@ const dropReady = (e) => LIB && !$('#library').hidden && e.dataTransfer?.types.i
 addEventListener('dragenter', (e) => {
   if (!dropReady(e)) return;
   dragDepth++;
-  $('#drop').textContent = `Drop to move into ${LIB.split('/').pop()}`;
+  $('#drop').textContent = `Drop to move into ${LIB.split(/[\\/]/).pop()}`;
   $('#drop').hidden = false;
 });
 addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').hidden = true; } });

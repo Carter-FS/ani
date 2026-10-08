@@ -52,7 +52,10 @@ CHILDREN = set()  # tool processes in flight, killed on shutdown so none are orp
 
 def kill_group(p):
     try:
-        os.killpg(p.pid, signal.SIGKILL)  # the tool and anything it started (alass runs ffmpeg)
+        if os.name == "nt":
+            p.kill()  # ponytail: just the tool; an ffmpeg alass started finishes on its own
+        else:
+            os.killpg(p.pid, signal.SIGKILL)  # the tool and anything it started (alass runs ffmpeg)
     except OSError:
         pass
 
@@ -64,7 +67,8 @@ def run(cmd, low=False, timeout=600):
         cmd = LOW_PRIORITY + cmd
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, errors="replace", start_new_session=True)
+                             encoding="utf-8", errors="replace", start_new_session=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))  # no console flash on Windows
     except OSError as e:  # tool not installed
         return subprocess.CompletedProcess(cmd, 127, "", str(e))
     CHILDREN.add(p)
@@ -433,7 +437,7 @@ BG_LOCK = threading.Lock()
 
 def load_json(path, default):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 
@@ -449,7 +453,7 @@ def save_state():
     with STATE_LOCK:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = STATE_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(STATE, ensure_ascii=False, indent=1))
+        tmp.write_text(json.dumps(STATE, ensure_ascii=False, indent=1), encoding="utf-8")
         tmp.replace(STATE_PATH)
 
 
@@ -1041,7 +1045,7 @@ class Server(BaseHTTPRequestHandler):
         elif path == "/options":
             OPTIONS.update({k: body[k] for k in OPTIONS if k in body})
             STATE_DIR.mkdir(parents=True, exist_ok=True)
-            OPTIONS_PATH.write_text(json.dumps(OPTIONS, ensure_ascii=False))
+            OPTIONS_PATH.write_text(json.dumps(OPTIONS, ensure_ascii=False), encoding="utf-8")
             self.send(body=OPTIONS)
         else:
             self.send(404)
