@@ -24,7 +24,15 @@ from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 
 HERE = Path(__file__).parent
 BIN = HERE / "user_files" / "bin"  # user_files survives add-on updates
-os.environ.setdefault("ANI_STATE", str(HERE / "user_files"))
+STATE = Path(os.environ.setdefault("ANI_STATE", str(HERE / "user_files")))
+# The ani command keeps its library in its own state folder; on the add-on's first start, bring it
+# along so switching to the add-on doesn't empty the library.
+CLI_STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "ani"
+if not (STATE / "state.json").exists() and CLI_STATE.resolve() != STATE.resolve():
+    for name in ("state.json", "options.json"):
+        if (CLI_STATE / name).is_file():
+            STATE.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(CLI_STATE / name, STATE / name)
 # Tools already installed win; downloaded ones fill the gaps. Apps opened from the macOS Dock
 # don't see Homebrew's PATH, so add its folders too.
 os.environ["PATH"] = os.pathsep.join(filter(None, [os.environ.get("PATH"), "/opt/homebrew/bin", "/usr/local/bin", str(BIN)]))
@@ -173,10 +181,13 @@ def add_series():
     folder = QFileDialog.getExistingDirectory(mw, "ani: choose the folder with the episodes")
     if not folder:
         return
+    # starts beside the episode folder, where a subtitle folder usually is; picking the episode folder
+    # itself means the subtitles are with the episodes, same as Cancel
     subs = QFileDialog.getExistingDirectory(
-        mw, "ani: choose the Japanese subtitle folder (Cancel if they are with the episodes)", folder)
+        mw, "ani: choose the Japanese subtitle folder (Cancel if they are with the episodes)", str(Path(folder).parent))
     folder = str(Path(folder).resolve())  # the same spelling the server stores
-    body = {"dir": folder, **({"subs": str(Path(subs).resolve())} if subs else {})}
+    subs = subs and str(Path(subs).resolve())
+    body = {"dir": folder, **({"subs": subs} if subs and subs != folder else {})}
     try:
         urllib.request.urlopen(urllib.request.Request(URL + "/register", json.dumps(body).encode()), timeout=10).close()
     except urllib.error.HTTPError as e:

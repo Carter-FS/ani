@@ -1044,10 +1044,13 @@ class Server(BaseHTTPRequestHandler):
             subs = str(Path(body["subs"]).resolve()) if body.get("subs") else None
             sub_file = str(Path(body["sub_file"]).resolve()) if body.get("sub_file") else None
             with STATE_LOCK:
+                new = str(folder) not in STATE["series"]
                 entry = STATE["series"].setdefault(str(folder), {"subs": None})
                 if subs and subs != entry.get("subs"):
                     entry["subs"] = subs
-                    for v in episodes(folder):  # new subtitle source: earlier syncs are stale
+                    # a changed subtitle source makes earlier syncs stale; a series added afresh (say
+                    # after a reinstall) keeps the synced subtitles already beside its videos
+                    for v in [] if new else episodes(folder):
                         if str(v) not in STATE["overrides"]:
                             clear_synced(v)
                 if video:

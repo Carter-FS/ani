@@ -332,6 +332,21 @@ cues = lambda *ms: [[["x"], t, "", t + 500, ""] for t in ms]
 assert s.agreement(cues(1000, 5000), cues(1400, 9000)) == 0.5
 assert s.agreement(cues(), cues(1000)) == 0.0 and s.agreement(cues(1000), []) == 0.0
 
+# --- /register: a series added afresh (e.g. after a reinstall) keeps the synced subtitles beside its
+# videos; changing an existing series' subtitle folder makes them stale
+sent = []
+h = s.Server.__new__(s.Server)  # just the request logic, no socket
+h.send = lambda code=200, body=b"", ctype="": sent.append((code, body))
+readd, subs_a, subs_b = tmpdir(), tmpdir(), tmpdir()
+(readd / "Show - 01.mkv").write_bytes(b"v")
+(readd / "Show - 01.ani.srt").write_text("synced earlier")
+h.post("/register", {"dir": str(readd), "subs": str(subs_a)})
+assert sent[-1] == (200, {"ok": True}) and (readd / "Show - 01.ani.srt").exists()
+h.post("/register", {"dir": str(readd), "subs": str(subs_a)})  # same folder again: nothing changes
+assert (readd / "Show - 01.ani.srt").exists()
+h.post("/register", {"dir": str(readd), "subs": str(subs_b)})
+assert not (readd / "Show - 01.ani.srt").exists()
+
 # --- card checks: empty sentences never match; multi-card notes filled once; failures retried
 s.SESSION = s.Session("id", "f.mkv", [[["…"], 0, "", 500, ""], [["はい"], 1000, "", 2000, ""]], ["", "はい"], "0:a:0")
 s.OPTIONS.update(deck="Mining", sentence="Sentence", expression="Word", picture="Picture", audio="Audio")
