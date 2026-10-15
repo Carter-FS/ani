@@ -24,6 +24,8 @@ You need [Anki](https://apps.ankiweb.net/) 25.07 or later and a browser with [Yo
 2. Say yes when ani offers to install AnkiConnect, then restart Anki again. On first start ani also downloads the tools it needs (about 80 MB).
 3. Open Tools > ani: Library, click the settings icon, type a deck name and click **Create the ani note type for this deck**. Then copy the field list it shows into Yomitan's Anki settings.
 
+Already using [Lapis](https://github.com/donkuri/lapis)? Skip step 3's button: Lapis has the same field names ani fills by default (`Expression`, `Sentence`, `Picture`, `SentenceAudio`), so in ani's settings just pick your mining deck. Keep Lapis's Yomitan setup as it is; ani matches the sentence with its `<b>` tags removed and leaves Lapis's bolding in place.
+
 On Anki from Flathub, also run `flatpak override --user --filesystem=home net.ankiweb.Anki` so ani can find files you drop onto a series.
 
 ## Use
