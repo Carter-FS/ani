@@ -64,8 +64,20 @@ Set these as environment variables for Anki if the defaults don't suit:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ANI_PORT` | `6969` | Port the player is served on |
+| `ANI_HOSTS` | none | Extra `host:port` names the player answers to, comma-separated (see below) |
 | `ANI_SEARCH` | Downloads, Desktop, Movies, Videos | Folders searched for files dropped onto a series (`:`-separated, `;` on Windows) |
 | `ANKICONNECT` | `http://127.0.0.1:8765` | AnkiConnect URL |
+
+### Watching from another device
+
+ani only listens on this computer and refuses requests addressed to any other name. To watch on another of your devices, forward a private address to the player and list that address in `ANI_HOSTS`. With Tailscale, for example:
+
+```sh
+tailscale serve --bg --https=8443 http://127.0.0.1:6969
+ANI_HOSTS=yourmachine.your-tailnet.ts.net:8443 anki
+```
+
+Then open `https://yourmachine.your-tailnet.ts.net:8443` on the other device. Anyone who can reach that address can control the player, so only use one that is private to you. Cards are still filled through AnkiConnect on the computer running ani, so they are only filled when they reach that computer's Anki.
 
 ## Development
 

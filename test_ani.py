@@ -434,4 +434,9 @@ for bad in [("/nope", "a.mp4", 1), (str(root / "show"), "a.exe", 1), (str(root /
     except (ValueError, LookupError):
         pass
 
+# --- extra addresses only when listed in ANI_HOSTS
+assert s.allowed_hosts(6969) == {"127.0.0.1:6969", "localhost:6969"}
+assert s.allowed_hosts(6969, " box.example.ts.net:8443 ,, ani.lan:80 ") == {
+    "127.0.0.1:6969", "localhost:6969", "box.example.ts.net:8443", "ani.lan:80"}
+
 print("ok")

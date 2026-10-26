@@ -33,7 +33,15 @@ STATE_PATH = STATE_DIR / "state.json"
 OPTIONS_PATH = STATE_DIR / "options.json"
 THUMBS = STATE_DIR / "thumbs"
 PORT = int(os.environ.get("ANI_PORT", "6969"))
-HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+
+
+def allowed_hosts(port, extra=""):
+    """Addresses the player answers to: loopback, plus any "host:port" names listed in ANI_HOSTS
+    (comma-separated), e.g. a reverse proxy or `tailscale serve` that forwards to the loopback port."""
+    return {f"127.0.0.1:{port}", f"localhost:{port}", *(h.strip() for h in extra.split(",") if h.strip())}
+
+
+HOSTS = allowed_hosts(PORT, os.environ.get("ANI_HOSTS", ""))
 ANKI = os.environ.get("ANKICONNECT", "http://127.0.0.1:8765")
 FFMPEG = "ffmpeg"
 ALASS = shutil.which("alass-cli") or shutil.which("alass") or "alass-cli"
